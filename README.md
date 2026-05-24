@@ -31,7 +31,14 @@ A fully self-contained desktop analytics dashboard for **Kick.com** streamers. M
 
 ## 🖥️ Screenshots
 
-> Monitor multiple streamers simultaneously with live chat, viewbot detection and AI analysis
+### Main Application — Live Chat & Viewbot Detection
+![Main App](screenshots/screenshot_main.png)
+
+### AI Analysis — Forensic Viewbot Detection Report
+![AI Analysis](screenshots/screenshot_ai_analysis.png)
+
+### Multi-Channel Monitor — Track Multiple Streamers
+![Multi Channel](screenshots/screenshot_multi-channel.png)
 
 ---
 
