@@ -1,0 +1,566 @@
+╔══════════════════════════════════════════════════════════════════════════════╗
+║      KICK STREAM ANALYTICS — AI ANALYSIS GUIDE                             ║
+║      Understanding AI Models, GPU Requirements & Reading Your Results       ║
+╚══════════════════════════════════════════════════════════════════════════════╝
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+ SECTION 1 — HOW AI MODELS WORK WITH THIS APPLICATION
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+WHAT IS AN LLM?
+
+  LLM stands for Large Language Model. Think of it as an extremely well-read
+  analyst who has studied billions of documents, research papers, forum posts,
+  and data sets. It has learned patterns in language and reasoning so well
+  that it can read a set of numbers and metrics and write a detailed,
+  intelligent analysis — just like a human expert would.
+
+  The key word is "large" — the bigger the model, the more it has learned,
+  and the more nuanced and accurate its reasoning becomes.
+
+HOW IT WORKS IN THIS APP
+
+  When you click Run AI Analysis, the app does the following:
+
+  Step 1 — DATA COLLECTION
+    The app gathers everything it has monitored during your session:
+      • Viewer count history (every 30 seconds)
+      • Total unique chatters and their message counts
+      • Messages per minute rate
+      • Chat-to-viewer ratio
+      • Subscription, gift and raid events
+      • Known and likely bot detections
+      • Viewer count spike and drop percentages
+      • Stream duration, category, channel info
+
+  Step 2 — BUILDING THE PROMPT
+    All that data is formatted into a detailed briefing document — called a
+    "prompt" — that describes the stream metrics in a structured way. This is
+    sent to the AI model as the question it needs to answer.
+
+    Think of it like emailing a forensic analyst and saying:
+    "Here is everything we know about this stream. What do you think?"
+
+  Step 3 — AI REASONING
+    The AI model reads the entire prompt and reasons through the data the
+    same way a human expert would — comparing your stream's numbers against
+    what healthy, real streams typically look like, identifying patterns that
+    are suspicious, considering alternative explanations, and forming a
+    verdict based on the weight of evidence.
+
+  Step 4 — THE REPORT
+    The AI writes back a full structured report covering six sections:
+    Executive Summary, Signal Analysis, Suspicious Patterns, Legitimate
+    Explanations, Confidence Assessment, and Final Verdict.
+
+    This report appears in the AI Analysis tab and the key verdict
+    updates the Viewbot Detector panel in the side bar automatically.
+
+WHY DOES IT NEED 10 MINUTES OF DATA?
+
+  The AI's analysis is only as good as the data you give it. In the first
+  few minutes of monitoring, you don't have enough data points to draw
+  meaningful conclusions. After 10 minutes you have:
+
+    • 20+ viewer count snapshots to build a curve
+    • Hundreds or thousands of chat messages to analyse
+    • A reliable chat-to-viewer ratio
+    • Time to observe whether any real events (subs, gifts, raids) occur
+    • Enough history to spot spikes, drops or unnatural flatness
+
+  This is why the Run AI Analysis button is locked for the first 10 minutes.
+  Analysing a stream after 2 minutes would produce unreliable results.
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+ SECTION 2 — DEFAULT MODELS BY GPU AND HOW THEY WORK TOGETHER
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+WHAT IS VRAM AND WHY DOES IT MATTER?
+
+  VRAM (Video RAM) is the memory on your graphics card (GPU). AI models are
+  stored entirely in VRAM while running. Think of VRAM like a desk — the
+  bigger your desk, the larger the document you can spread out and read at
+  once. A bigger model needs a bigger desk.
+
+  If a model is too large for your VRAM it will either refuse to run or
+  spill over into regular system RAM, which is dramatically slower —
+  like moving half your papers to a filing cabinet in another room.
+
+  Running a model that fits comfortably in your VRAM means it runs fast
+  and produces results in 30-90 seconds. Running one that doesn't fit
+  properly can take 5-15 minutes or time out entirely.
+
+GPU TIERS AND DEFAULT MODELS
+
+  ┌─────────────────────────────────────────────────────────────────────┐
+  │  GPU TIER       VRAM      DEFAULT MODEL      MODEL SIZE             │
+  ├─────────────────────────────────────────────────────────────────────┤
+  │  High End       20GB+     qwen3:32b          ~20GB                  │
+  │  Upper Mid      10-20GB   qwen3:14b          ~9GB                   │
+  │  Mid Range      7-10GB    qwen3:8b           ~5.2GB  ← Recommended │
+  │  Entry Mid      5-7GB     mistral:7b         ~4.4GB                 │
+  │  Budget GPU     3-5GB     qwen3:4b           ~2.5GB                 │
+  │  Low VRAM       1-3GB     llama3.2:3b        ~2.0GB                 │
+  │  CPU Only       No GPU    phi3:mini          ~2.3GB                 │
+  └─────────────────────────────────────────────────────────────────────┘
+
+4GB GPU (e.g. GTX 1650, RTX 3050)
+  Default: qwen3:4b
+
+  The qwen3:4b model uses about 2.5GB of your 4GB VRAM, leaving headroom
+  for your operating system and other processes. Despite being a smaller
+  model, qwen3:4b is part of Alibaba's Qwen3 series which is specifically
+  engineered for strong reasoning in a compact size. It will produce a
+  solid viewbot analysis report with clear verdicts, though it may be less
+  detailed than larger models on subtle or complex cases.
+
+  What to expect:
+    • Analysis time: 30-60 seconds
+    • Report quality: Good — covers all 6 sections reliably
+    • Best for: Catching obvious viewbot cases, quick checks
+    • Limitation: May miss subtle sophisticated botting patterns
+
+8GB GPU (e.g. RTX 3070, RTX 3060, RTX 4060)
+  Default: qwen3:8b  ← Best free local option
+
+  This is the sweet spot for local AI analysis. The qwen3:8b model uses
+  about 5.2GB of your 8GB VRAM, running fully on the GPU for fast,
+  high quality results. Real-world testing on this application showed
+  qwen3:8b outperforming the older llama3.1:8b on analytical reasoning
+  tasks — it produces more structured, decisive and accurate reports.
+
+  What to expect:
+    • Analysis time: 45-90 seconds
+    • Report quality: Very good — detailed reasoning, accurate verdicts
+    • Best for: All viewbot cases including moderately sophisticated ones
+    • Note: Approaches Claude API quality on clear-cut cases
+
+12GB+ GPU (e.g. RTX 3080, RTX 4070, RTX 4090)
+  Default: qwen3:14b or qwen3:32b
+
+  With 12GB or more VRAM you can run 14 billion parameter models which
+  represent a significant jump in reasoning capability. At 20GB+ you can
+  run the full qwen3:32b model which produces analysis very close to
+  the commercial Claude API in quality and depth.
+
+  What to expect:
+    • Analysis time: 60-120 seconds (larger model = more processing)
+    • Report quality: Excellent — nuanced, forensic-level analysis
+    • Best for: Complex cases, borderline streams, research investigations
+    • qwen3:32b approaches Claude Sonnet quality on difficult cases
+
+CPU ONLY (No dedicated GPU)
+  Default: phi3:mini
+
+  If your machine has no dedicated graphics card (or integrated graphics
+  only), the model runs on your CPU using system RAM instead. Microsoft's
+  phi3:mini is specifically designed and optimised for CPU inference —
+  it uses aggressive compression techniques to run efficiently without
+  a GPU. The tradeoff is speed: expect 2-5 minutes for a full analysis.
+
+  What to expect:
+    • Analysis time: 2-5 minutes
+    • Report quality: Decent — will catch obvious cases
+    • Best for: Occasional use on office machines, laptops without GPU
+    • Tip: Consider using the Anthropic API instead for faster results
+
+HOW THE GPU DETECTION WORKS
+
+  When you click "Detect GPU" in the AI Analysis tab the app:
+
+  1. Queries nvidia-smi (Nvidia's own diagnostic tool) for exact VRAM
+  2. Falls back to GPUtil Python library if nvidia-smi isn't available
+  3. Falls back to Windows WMI (built-in system query) as a last resort
+
+  The detected GPU name, VRAM amount and recommended model are saved
+  automatically so you never need to detect again on the same machine.
+  Results are stored in ai_settings.json next to the application.
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+ SECTION 3 — HOW AI CALCULATES SCORES AND WHY BIGGER MODELS ARE BETTER
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+HOW THE NUMERIC DETECTOR WORKS (The side panel score)
+
+  The numeric detector in the side panel uses a simple rule-based system.
+  Think of it like a checklist with points:
+
+    Chat ratio below 1%?        → Add 22 points
+    Viewer spike over 100%?     → Add 28 points
+    Msgs/min per 1k below 3?    → Add 14 points
+    High bot ratio?             → Add 6 points
+    Spike AND low ratio?        → Bonus multiplier
+
+  These rules were set by hand and work well for obvious cases. But they
+  have a fundamental limitation: they only look at each signal one at a
+  time. They can't reason about the combination of signals in context.
+
+  Example of where it fails:
+    A stream with 110,000 viewers, 0.79% chat ratio, and 1.67 msgs/min
+    per 1,000 viewers might only score 28/100 — LOW RISK — because the
+    viewer curve happened to look relatively smooth and the spike score
+    was low. But a human expert looking at those same numbers would
+    immediately recognise this as almost certainly viewbotted.
+
+HOW THE AI CALCULATES ITS SCORE (The AI Analysis report)
+
+  The AI model doesn't use a fixed checklist. Instead it reasons about
+  the data the same way a forensic analyst would:
+
+  1. BASELINE COMPARISON
+     The AI knows what healthy streams look like from its training data.
+     It compares your stream's metrics against those baselines and asks:
+     "How far does each signal deviate from normal?"
+
+  2. CROSS-VALIDATION
+     Instead of scoring each signal separately, the AI looks for
+     consistency across all signals. For example:
+
+     "This stream has 111,000 viewers but only 185 messages per minute.
+      185 messages per minute is consistent with roughly 3,700-18,500
+      organic viewers — not 111,000. The message volume and the viewer
+      count are telling completely different stories. That contradiction
+      is the most important signal."
+
+     A simple checklist can't do this. The AI can.
+
+  3. ALTERNATIVE EXPLANATIONS
+     The AI actively considers innocent explanations before concluding
+     botting. Could this be a quiet stream? A different cultural audience?
+     A raid that just ended? It weighs these alternatives and states its
+     confidence level explicitly.
+
+  4. WEIGHTED VERDICT
+     The AI combines all its observations into a final verdict, scoring
+     0-100 and assigning one of five labels:
+       CLEAN              Very likely legitimate
+       LOW RISK           Minor anomalies, probably fine
+       SUSPICIOUS         Multiple red flags, investigate further
+       HIGH RISK          Strong evidence of viewbotting
+       CONFIRMED BOTTING  Overwhelming evidence, near certain
+
+WHY BIGGER MODELS ARE BETTER
+
+  Model size is measured in "parameters" — think of parameters as the
+  number of connections in the AI's brain. More connections = more
+  nuance = better reasoning.
+
+  ┌──────────────┬────────────┬──────────────────────────────────────┐
+  │ Model        │ Parameters │ Capability                           │
+  ├──────────────┼────────────┼──────────────────────────────────────┤
+  │ phi3:mini    │ 3.8B       │ Basic analysis, obvious cases        │
+  │ qwen3:4b     │ 4B         │ Good analysis, most cases            │
+  │ qwen3:8b     │ 8B         │ Strong analysis, subtle cases        │
+  │ qwen3:14b    │ 14B        │ Excellent, near-API quality          │
+  │ qwen3:32b    │ 32B        │ Outstanding, approaches Claude       │
+  │ Claude Sonnet│ ~70B+      │ Forensic quality, best available    │
+  └──────────────┴────────────┴──────────────────────────────────────┘
+
+  The difference in practice:
+
+  SMALL MODEL (4B) on a borderline stream:
+    "The chat ratio is below the healthy threshold. This may indicate
+    viewbotting. Further investigation is recommended."
+
+  LARGE MODEL (32B or Claude) on the same stream:
+    "At 111,119 viewers, a healthy engagement rate would produce between
+    3,334 and 8,889 chatters. This stream produced 875 over more than an
+    hour — approximately 1/4 of the low end of the healthy range. The
+    message volume of 185 per minute cross-validates to an organic audience
+    of roughly 3,700-18,500 viewers, orders of magnitude smaller than the
+    displayed count. Additionally, only 4 subscriptions were recorded during
+    this period — at a conservative 0.1% conversion rate, 111K viewers
+    would be expected to generate 111 subscriptions. The engagement deficit
+    has no comfortable organic explanation at this scale."
+
+  The larger model catches the same red flags but ALSO:
+    • Cross-validates multiple signals against each other
+    • Calculates what the numbers imply about real audience size
+    • Considers the financial conversion angle (subs/gifts)
+    • States exactly how confident it is and why
+    • Produces a more persuasive, evidence-based verdict
+
+WHY THE CLAUDE API IS CURRENTLY THE BEST OPTION
+
+  Claude Sonnet (the Anthropic API model) is a frontier-class commercial
+  AI with hundreds of billions of parameters trained by one of the world's
+  leading AI safety companies. It represents a step above even the best
+  local models available today.
+
+  In real-world testing on this application, Claude Sonnet:
+    • Performed cross-validation that local models missed entirely
+    • Correctly isolated organic audience size from the message volume
+    • Used the subscription deficit as a key corroborating signal
+    • Distinguished between chat bots and viewer bots (separate fraud types)
+    • Noted that platform context matters (Kick skews more chat-active
+      than YouTube, making low ratios more alarming on Kick specifically)
+
+  Cost: approximately $0.03 per full analysis — less than a cent for
+  most sessions. For serious investigation work the quality difference
+  is worth it.
+
+  The tradeoff:
+    • Requires an internet connection and an API key
+    • Costs a small amount per use
+    • Data is sent to Anthropic's servers (only stream metrics, never
+      personal data or your account information)
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+ SECTION 4 — HOW TO READ YOUR AI ANALYSIS REPORT
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+YOUR REPORT HAS SIX SECTIONS — HERE IS WHAT EACH ONE MEANS:
+
+─────────────────────────────────────────────────────────────────────────────
+  1. EXECUTIVE SUMMARY
+─────────────────────────────────────────────────────────────────────────────
+
+  This is the TL;DR — the AI's overall impression in one paragraph.
+  Read this first. It will tell you immediately whether the AI thinks
+  something is wrong and give you the headline finding.
+
+  What to look for:
+    • "Deeply contradictory data profile" = serious red flags found
+    • "Consistent with organic viewership" = stream looks legitimate
+    • "Further investigation warranted" = borderline, needs more time
+    • Any mention of a specific ratio being far below healthy = key signal
+
+  Example of a HIGH RISK summary:
+    "A channel broadcasting to 111,119 viewers is generating chat activity
+    consistent with a stream of roughly 1,500-3,000 organic viewers. The
+    engagement deficit is the story, and it is damning."
+
+  Example of a CLEAN summary:
+    "All engagement metrics are consistent with organic viewership at this
+    scale. Chat activity, message rates and event frequency all fall within
+    expected ranges for a stream of this size."
+
+─────────────────────────────────────────────────────────────────────────────
+  2. SIGNAL ANALYSIS
+─────────────────────────────────────────────────────────────────────────────
+
+  This section examines each metric individually. The AI looks at:
+
+  VIEWER COUNT CURVE SHAPE
+    Is the viewer count rising and falling naturally, or is it suspiciously
+    flat or showing sudden vertical jumps? Real streams fluctuate naturally
+    as viewers join and leave. Viewbots tend to maintain an unnaturally
+    steady count or spike suddenly in large round numbers.
+
+    Key terms:
+      "Unnaturally flat" = viewer count barely moves (bots hold steady)
+      "Standard deviation < 5%" = too little variation for a real stream
+      "Vertical spike" = sudden jump of 50%+ in under 3 minutes
+      "Organic drift" = normal gentle rises and falls
+
+  CHAT-TO-VIEWER RATIO
+    This is often the single most important signal. It measures what
+    percentage of viewers are actively chatting.
+
+    Healthy ranges:
+      3-8%  = normal for most live streams
+      1-3%  = quiet stream, some concern
+      < 1%  = very suspicious at large viewer counts
+      < 0.5% = almost certainly artificial viewers
+
+    Why this matters: Viewbots can inflate the viewer count number, but
+    they cannot chat. Real viewers chat. If you have 100,000 viewers but
+    only 500 chatters — that ratio (0.5%) is telling you the real audience
+    is far smaller than the number suggests.
+
+  MESSAGE RATE PER 1,000 VIEWERS
+    This is a normalised version of chat activity — how active is the
+    chat relative to the viewer count? A stream with 1,000 viewers having
+    100 messages per minute is very different from a stream with 100,000
+    viewers having 100 messages per minute.
+
+    Healthy range: 10-50 messages per minute per 1,000 viewers
+    Suspicious:    below 5
+    Very suspicious: below 2
+
+    The AI will often cross-validate this number to estimate the real
+    organic audience size. For example:
+      "185 messages per minute at a healthy rate of 10-50/min/1k viewers
+       implies an organic audience of 3,700-18,500 — not 111,000."
+
+  BOT PRESENCE IN CHAT
+    This detects bots that are chatting — account names matching known
+    bot patterns, or accounts sending identical messages at inhuman speeds.
+
+    Important note: This signal detects CHAT bots, not VIEWER bots.
+    These are two different types of fraud. Viewer bots inflate the
+    viewer counter but do not chat. The absence of chat bots does NOT
+    mean there are no viewer bots — they are separate mechanisms.
+
+  EVENT ACTIVITY (Subs, Gifts, Raids)
+    Real viewers subscribe, gift subs to others, and raid other channels.
+    Viewbots cannot do any of these things — they have no accounts, no
+    wallets, and no ability to take actions.
+
+    At high viewer counts, the absence of financial activity is a strong
+    signal:
+      "4 subscriptions at 111,000 viewers — at 0.1% conversion that
+       should be 111 subscriptions. The financial silence is deafening."
+
+─────────────────────────────────────────────────────────────────────────────
+  3. SUSPICIOUS PATTERNS IDENTIFIED
+─────────────────────────────────────────────────────────────────────────────
+
+  This section lists the specific observations that raised concern,
+  written as bullet points or a numbered list. Read this carefully —
+  this is where the AI explains exactly WHY it is suspicious.
+
+  Strong patterns to watch for:
+    • Multiple signals all pointing the same direction simultaneously
+    • Chat volume consistent with much smaller real audience
+    • Subscription/gift count far below what viewer count implies
+    • Viewer curve flat during moments that should cause spikes
+      (raids, hype moments, exciting gameplay)
+    • Message volume that matches a 3,000 viewer stream, not 100,000
+
+─────────────────────────────────────────────────────────────────────────────
+  4. LEGITIMATE EXPLANATIONS
+─────────────────────────────────────────────────────────────────────────────
+
+  A good AI analyst always considers innocent explanations before
+  concluding fraud. This section lists alternative reasons that could
+  explain the data without viewbotting being involved.
+
+  Common legitimate explanations:
+    • Recent raid from a large channel (sudden viewer spike is natural)
+    • Category or title change that pulled in browsing viewers
+    • Stream is primarily background content (music, sleep streams)
+    • Non-English speaking audience with different chat culture
+    • Stream just started and audience hasn't settled
+
+  How to use this section:
+    If the AI lists a legitimate explanation that you know applies
+    (e.g. you saw a massive raid happen), weight the verdict accordingly.
+    If none of the listed explanations seem to apply based on what you
+    observed, that strengthens the case for viewbotting.
+
+─────────────────────────────────────────────────────────────────────────────
+  5. CONFIDENCE ASSESSMENT
+─────────────────────────────────────────────────────────────────────────────
+
+  This section tells you how certain the AI is about its verdict and why.
+
+  High confidence means:
+    • Multiple independent signals all agree
+    • The numbers are far outside normal ranges, not borderline
+    • Legitimate explanations have been considered and ruled out
+    • The cross-validation of different metrics produces consistent results
+
+  Low confidence means:
+    • Only one or two signals are flagged
+    • The numbers are in a borderline range
+    • There are plausible legitimate explanations
+    • The monitoring session was too short or data was limited
+
+  Always read this section alongside the verdict. A HIGH RISK verdict
+  with LOW confidence should prompt you to monitor longer before drawing
+  conclusions. A SUSPICIOUS verdict with HIGH confidence is worth taking
+  seriously even though it's not the strongest verdict label.
+
+─────────────────────────────────────────────────────────────────────────────
+  6. FINAL VERDICT
+─────────────────────────────────────────────────────────────────────────────
+
+  The AI's bottom line. One of five labels with a score 0-100:
+
+  ✅ CLEAN (0-20)
+    All metrics are consistent with organic viewership. No action needed.
+    The stream looks legitimate based on the available data.
+
+  🟢 LOW RISK (21-40)
+    Minor anomalies detected but nothing that strongly indicates fraud.
+    Could be a quiet stream, niche audience, or just an off day.
+    Worth a second look if you monitor again and see the same pattern.
+
+  🟡 SUSPICIOUS (41-65)
+    Multiple signals raise concern. Not conclusive, but warrants attention.
+    Recommended: monitor for another session to see if the pattern persists.
+    Note the specific signals flagged and watch whether they improve.
+
+  🔴 HIGH RISK (66-85)
+    Strong evidence of artificial viewer inflation. The data profile is
+    very difficult to explain through organic means. Multiple independent
+    signals point in the same direction. This stream should be reported
+    to Kick.com through their official reporting channels.
+
+  🔴 CONFIRMED BOTTING (86-100)
+    Overwhelming evidence. The combination of signals — engagement deficit,
+    financial silence, curve analysis, message cross-validation — all
+    converge on the same conclusion with very high confidence. The gap
+    between displayed viewers and real audience is almost certainly
+    artificial. Report immediately.
+
+WHAT TO DO WITH THE RESULTS
+
+  CLEAN or LOW RISK:
+    No action required. Continue monitoring if you want more data.
+
+  SUSPICIOUS:
+    Monitor the stream for a second 10-minute session. If the pattern
+    persists across two independent sessions the case is stronger.
+
+  HIGH RISK or CONFIRMED BOTTING:
+    1. Save the analysis report using the Save Analysis button
+    2. Note the channel name, date, time and key metrics
+    3. Report to Kick.com:  kick.com/help (use the Report Content option)
+    4. You can reference specific metrics from the report in your submission
+       (e.g. "0.79% chat ratio with 111,000 viewers, 4 subs in 63 minutes")
+
+A NOTE ON CERTAINTY
+
+  No tool — human or AI — can be 100% certain about viewbotting from
+  metrics alone. The AI analysis provides a probability assessment based
+  on available evidence. It is a powerful investigative tool, not a
+  definitive legal determination.
+
+  The strongest cases are those where:
+    • Multiple independent signals all point the same direction
+    • The numbers are far outside normal ranges (not borderline)
+    • The pattern is consistent across more than one monitoring session
+    • Legitimate explanations have been considered and don't apply
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+ QUICK REFERENCE — KEY METRICS AT A GLANCE
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  CHAT-TO-VIEWER RATIO
+    Healthy:       3-8%
+    Concerning:    1-3%
+    Suspicious:    < 1%
+    Very suspicious: < 0.5%
+
+  MESSAGES PER MINUTE PER 1,000 VIEWERS
+    Healthy:       10-50
+    Concerning:    5-10
+    Suspicious:    2-5
+    Very suspicious: < 2
+
+  VIEWER CURVE FLATNESS (standard deviation)
+    Healthy:       > 5% variation
+    Suspicious:    < 3% variation
+    Very suspicious: < 1% variation
+
+  VIEWER SPIKE (within 3 minutes)
+    Normal:        < 25%
+    Concerning:    25-50%
+    Suspicious:    50-100%
+    Very suspicious: > 100%
+
+  SUBSCRIPTION RATE (rough benchmark)
+    Expected minimum: 0.05-0.1% of viewer count per hour
+    e.g. 100,000 viewers → expect at least 50-100 subs/hour
+    Near zero subs at high viewer counts = strong red flag
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+ CREATED FOR  Kick Stream Analytics & Deep AI Research Tool
+ by Ask_fOr_DaX
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
