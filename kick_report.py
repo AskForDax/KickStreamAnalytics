@@ -391,6 +391,7 @@ class ChatEngine:
                                 "App\\Events\\SubscriptionEvent",
                                 "App\\Events\\NewSubscriberEvent",
                                 "App\\Events\\SubscriptionCreatedEvent",
+                                "App\\Events\\ChannelSubscriptionEvent",
                             ):
                                 p = env.get("data","{}");
                                 if isinstance(p, str): p = json.loads(p)
@@ -399,6 +400,7 @@ class ChatEngine:
                                 "App\\Events\\GiftedSubscriptionsEvent",
                                 "App\\Events\\GiftSubscriptionsEvent",
                                 "App\\Events\\SubscriptionGiftedEvent",
+                                "App\\Events\\LuckyUsersWhoGotGiftSubscriptionsEvent",
                             ):
                                 p = env.get("data","{}");
                                 if isinstance(p, str): p = json.loads(p)
@@ -410,20 +412,39 @@ class ChatEngine:
                                 p = env.get("data","{}");
                                 if isinstance(p, str): p = json.loads(p)
                                 self.record_event("raid", p)
-                            elif event == "App\\Events\\ChatMessageDeletedEvent":
-                                self.record_event("delete", {})
+                            elif event in (
+                                "App\\Events\\ChatMessageDeletedEvent",
+                                "App\\Events\\MessageDeletedEvent",
+                            ):
+                                p = env.get("data","{}");
+                                if isinstance(p, str):
+                                    try: p = json.loads(p)
+                                    except: p = {}
+                                self.record_event("delete", p)
                             elif event == "App\\Events\\UserBannedEvent":
                                 p = env.get("data","{}");
                                 if isinstance(p, str): p = json.loads(p)
                                 self.record_event("ban", p)
+                            elif event == "App\\Events\\UserUnbannedEvent":
+                                p = env.get("data","{}");
+                                if isinstance(p, str): p = json.loads(p)
+                                self.record_event("unban", p)
                             elif event == "App\\Events\\PinnedMessageCreatedEvent":
                                 p = env.get("data","{}");
                                 if isinstance(p, str): p = json.loads(p)
                                 self.record_event("pin", p)
-                            elif event == "App\\Events\\GiftsLeaderboardUpdated":
+                            elif event in (
+                                "App\\Events\\GiftsLeaderboardUpdated",
+                            ):
                                 p = env.get("data","{}");
                                 if isinstance(p, str): p = json.loads(p)
                                 self.record_event("gift", p)
+                            elif event == "App\\Events\\StopStreamBroadcast":
+                                p = env.get("data","{}");
+                                if isinstance(p, str):
+                                    try: p = json.loads(p)
+                                    except: p = {}
+                                self.record_event("streamend", p)
                             elif event not in (
                                 "pusher:connection_established",
                                 "pusher_internal:subscription_succeeded",
@@ -2186,54 +2207,88 @@ Complete ALL 6 sections. Do not stop early."""
             f, bg=BG2, fg=WHITE, font=("Consolas",10),
             state="disabled", wrap="word", relief="flat")
         self.events_box.pack(fill="both", expand=True, padx=4, pady=4)
-        self.events_box.tag_config("raid",  foreground=YELLOW,  font=("Consolas",11,"bold"))
-        self.events_box.tag_config("sub",   foreground=ACCENT2, font=("Consolas",10,"bold"))
-        self.events_box.tag_config("gift",  foreground=ACCENT,  font=("Consolas",10,"bold"))
-        self.events_box.tag_config("ban",   foreground=RED,     font=("Consolas",10,"bold"))
-        self.events_box.tag_config("pin",   foreground=BLUE,    font=("Consolas",10,"bold"))
-        self.events_box.tag_config("time",  foreground=GREY)
-        self.events_box.tag_config("plain", foreground=WHITE)
+        self.events_box.tag_config("raid",      foreground=YELLOW,  font=("Consolas",11,"bold"))
+        self.events_box.tag_config("sub",       foreground=ACCENT2, font=("Consolas",10,"bold"))
+        self.events_box.tag_config("gift",      foreground=ACCENT,  font=("Consolas",10,"bold"))
+        self.events_box.tag_config("ban",       foreground=RED,     font=("Consolas",10,"bold"))
+        self.events_box.tag_config("unban",     foreground=ACCENT,  font=("Consolas",10,"bold"))
+        self.events_box.tag_config("pin",       foreground=BLUE,    font=("Consolas",10,"bold"))
+        self.events_box.tag_config("delete",    foreground=GREY,    font=("Consolas",10))
+        self.events_box.tag_config("streamend", foreground=RED,     font=("Consolas",11,"bold"))
+        self.events_box.tag_config("time",      foreground=GREY)
+        self.events_box.tag_config("plain",     foreground=WHITE)
 
 
     def _append_event(self, ev):
-        eb  = self.events_box
-        ts  = datetime.fromtimestamp(ev["timestamp"]).strftime("%H:%M:%S")
-        d   = ev["data"]
-        kind= ev["kind"]
+        eb   = self.events_box
+        ts   = datetime.fromtimestamp(ev["timestamp"]).strftime("%H:%M:%S")
+        d    = ev["data"]
+        kind = ev["kind"]
         eb.config(state="normal")
         eb.insert("end", f"[{ts}] ", "time")
+
         if kind == "raid":
             host = d.get("host_username") or d.get("channel", {}).get("slug","?")
             vwrs = d.get("number_viewers", "?")
-            eb.insert("end", f"🚀 RAID  {host} raided with {vwrs} viewers!\n", "raid")
+            eb.insert("end", f"🚀 RAID       {host} raided with {vwrs} viewers!\n", "raid")
+
         elif kind == "subscription":
             u = (d.get("username")
               or d.get("user",{}).get("username","?")
               or d.get("subscriber",{}).get("username","?"))
             months = d.get("months_subscribed") or d.get("months","")
             month_str = f" ({months} months)" if months else ""
-            eb.insert("end", f"⭐ SUB   {u} just subscribed!{month_str}\n", "sub")
+            # Handle ChannelSubscriptionEvent which has user_ids list
+            if not u or u == "?":
+                uids = d.get("user_ids", [])
+                if uids:
+                    u = f"{len(uids)} user(s)"
+            eb.insert("end", f"⭐ SUB        {u} just subscribed!{month_str}\n", "sub")
+
         elif kind == "gift":
             u = (d.get("gifted_by")
               or d.get("gifter_username","?")
               or d.get("user",{}).get("username","?"))
-            # Count recipients — various field names
             recipients = (d.get("gifted_usernames")
                        or d.get("gifted_users")
                        or d.get("recipients", []))
+            # LuckyUsersWhoGotGiftSubscriptionsEvent has a users list
+            if not recipients:
+                recipients = d.get("users", [])
             qty = d.get("quantity") or d.get("amount") or len(recipients) or 1
-            eb.insert("end", f"🎁 GIFT  {u} gifted {qty} sub(s)!\n", "gift")
+            if u == "?" and recipients:
+                u = f"{len(recipients)} lucky users"
+            eb.insert("end", f"🎁 GIFT       {u} gifted {qty} sub(s)!\n", "gift")
+
         elif kind == "ban":
             u = d.get("user",{}).get("username","?")
-            eb.insert("end", f"🔨 BAN   {u} was banned.\n", "ban")
+            eb.insert("end", f"🔨 BAN        {u} was banned.\n", "ban")
+
+        elif kind == "unban":
+            u = d.get("user",{}).get("username","?")
+            eb.insert("end", f"✅ UNBAN      {u} was unbanned.\n", "unban")
+
         elif kind == "pin":
-            eb.insert("end", f"📌 PIN   A message was pinned.\n", "pin")
+            eb.insert("end", f"📌 PIN        A message was pinned.\n", "pin")
+
+        elif kind == "delete":
+            msg_id = d.get("id","") if isinstance(d, dict) else ""
+            eb.insert("end", f"🗑 DELETED    A message was removed.\n", "delete")
+
+        elif kind == "streamend":
+            title = ""
+            if isinstance(d, dict):
+                ls = d.get("livestream", {})
+                title = ls.get("session_title","") if ls else ""
+            eb.insert("end", f"📴 STREAM ENDED  {title}\n", "streamend")
+
         elif kind == "unknown":
-            # Show raw unknown events so we can identify new event names
-            event_name = d.get("event","?").split("\\")[-1]
-            eb.insert("end", f"❓ UNKNOWN  {event_name}: {str(d.get('data',''))[:60]}\n", "plain")
+            event_name = d.get("event","?").split("\\")[-1] if isinstance(d, dict) else str(d)
+            eb.insert("end", f"❓ UNKNOWN    {event_name}: {str(d.get('data','') if isinstance(d,dict) else '')[:60]}\n", "plain")
+
         else:
             eb.insert("end", f"ℹ {kind}: {str(d)[:80]}\n", "plain")
+
         eb.config(state="disabled")
         eb.see("end")
 
@@ -2245,7 +2300,7 @@ Complete ALL 6 sections. Do not stop early."""
 
         toolbar = tk.Frame(f, bg=BG2)
         toolbar.pack(fill="x")
-        tk.Button(toolbar, text="⟳ Refresh", command=self._refresh_chatters,
+        tk.Button(toolbar, text="⟳ Scan", command=self._refresh_chatters,
                   bg=ACCENT, fg="#000", font=("Segoe UI",9,"bold"),
                   relief="flat", padx=10, pady=3).pack(side="left", padx=8, pady=4)
         tk.Button(toolbar, text="💾 Export CSV", command=self._export_chatters_csv,
@@ -2264,6 +2319,16 @@ Complete ALL 6 sections. Do not stop early."""
                            value=opt, bg=BG2, fg=WHITE, selectcolor=BG3,
                            font=("Segoe UI",9),
                            command=self._refresh_chatters).pack(side="left", padx=3)
+
+        # Auto Scan checkbox — far right, ticked by default
+        self.chatter_auto_var = tk.BooleanVar(value=True)
+        tk.Checkbutton(toolbar, text="Auto Scan (30s)",
+                       variable=self.chatter_auto_var,
+                       bg=BG2, fg=WHITE, selectcolor=BG3,
+                       font=("Segoe UI",9),
+                       command=self._chatter_auto_toggle
+                       ).pack(side="right", padx=10)
+        self._chatter_auto_id = None
 
         cols = ("Username","Messages","Type","Rate/s","Badges")
         self.chatter_tree = ttk.Treeview(f, columns=cols, show="headings",
@@ -2290,6 +2355,20 @@ Complete ALL 6 sections. Do not stop early."""
         self._sort_col = "Messages"
         self._sort_rev = True
 
+
+    def _chatter_auto_toggle(self):
+        if self.chatter_auto_var.get():
+            self._chatter_auto_scan()
+        else:
+            if self._chatter_auto_id:
+                self.root.after_cancel(self._chatter_auto_id)
+                self._chatter_auto_id = None
+
+    def _chatter_auto_scan(self):
+        if not self.chatter_auto_var.get():
+            return
+        self._refresh_chatters()
+        self._chatter_auto_id = self.root.after(30000, self._chatter_auto_scan)
 
     def _refresh_chatters(self):
         classified = self.engine.classify()
@@ -2333,7 +2412,7 @@ Complete ALL 6 sections. Do not stop early."""
 
         toolbar = tk.Frame(f, bg=BG2)
         toolbar.pack(fill="x")
-        tk.Button(toolbar, text="⟳ Refresh", command=self._refresh_words,
+        tk.Button(toolbar, text="⟳ Scan", command=self._refresh_words,
                   bg=ACCENT, fg="#000", font=("Segoe UI",9,"bold"),
                   relief="flat", padx=10, pady=3).pack(side="left", padx=8, pady=4)
 
@@ -2343,8 +2422,8 @@ Complete ALL 6 sections. Do not stop early."""
                        font=("Segoe UI",9),
                        command=self._refresh_words).pack(side="left", padx=8)
 
-        self.words_auto_refresh_var = tk.BooleanVar(value=False)
-        tk.Checkbutton(toolbar, text="Auto-refresh (60s)", variable=self.words_auto_refresh_var,
+        self.words_auto_refresh_var = tk.BooleanVar(value=True)
+        tk.Checkbutton(toolbar, text="Auto Scan (20s)", variable=self.words_auto_refresh_var,
                        bg=BG2, fg=WHITE, selectcolor=BG3,
                        font=("Segoe UI",9),
                        command=self._words_auto_refresh_toggle).pack(side="left", padx=4)
@@ -2379,13 +2458,13 @@ Complete ALL 6 sections. Do not stop early."""
 
 
     def _words_schedule_refresh(self):
-        """Refresh now and schedule the next one in 60s if still enabled."""
+        """Refresh now and schedule the next one in 20s if still enabled."""
         if not self.words_auto_refresh_var.get():
             return
         self._refresh_words()
         ts = datetime.now().strftime("%H:%M:%S")
-        self.words_status_var.set(f"Auto-refreshed {ts}")
-        self._words_auto_id = self.root.after(60000, self._words_schedule_refresh)
+        self.words_status_var.set(f"Auto-scanned {ts}")
+        self._words_auto_id = self.root.after(20000, self._words_schedule_refresh)
 
 
     def _refresh_words(self):
@@ -2453,13 +2532,37 @@ Complete ALL 6 sections. Do not stop early."""
 
         toolbar = tk.Frame(f, bg=BG2)
         toolbar.pack(fill="x")
-        tk.Button(toolbar, text="⟳ Refresh Chart", command=self._refresh_chart,
+        tk.Button(toolbar, text="⟳ Scan", command=self._refresh_chart,
                   bg=ACCENT, fg="#000", font=("Segoe UI",9,"bold"),
                   relief="flat", padx=10, pady=3).pack(side="left", padx=8, pady=4)
+
+        # Auto Scan checkbox — far right, ticked by default
+        self.chart_auto_var = tk.BooleanVar(value=True)
+        tk.Checkbutton(toolbar, text="Auto Scan (20s)",
+                       variable=self.chart_auto_var,
+                       bg=BG2, fg=WHITE, selectcolor=BG3,
+                       font=("Segoe UI",9),
+                       command=self._chart_auto_toggle
+                       ).pack(side="right", padx=10)
+        self._chart_auto_id = None
 
         self.chart_canvas = tk.Canvas(f, bg=BG2, highlightthickness=0)
         self.chart_canvas.pack(fill="both", expand=True, padx=8, pady=8)
 
+
+    def _chart_auto_toggle(self):
+        if self.chart_auto_var.get():
+            self._chart_auto_scan()
+        else:
+            if self._chart_auto_id:
+                self.root.after_cancel(self._chart_auto_id)
+                self._chart_auto_id = None
+
+    def _chart_auto_scan(self):
+        if not self.chart_auto_var.get():
+            return
+        self._refresh_chart()
+        self._chart_auto_id = self.root.after(20000, self._chart_auto_scan)
 
     def _refresh_chart(self):
         c  = self.chart_canvas
@@ -3183,18 +3286,18 @@ A NOTE ON CERTAINTY
                      font=("Segoe UI",11), relief="flat", bd=4)
         e.pack(side="left", pady=6)
         e.bind("<Return>", lambda _: self._load_streamer_info())
-        tk.Button(tb, text="🔍 Load Info", command=self._load_streamer_info,
-                  bg=ACCENT, fg="#000", font=("Segoe UI",10,"bold"),
-                  relief="flat", padx=12, pady=4, cursor="hand2").pack(side="left", padx=8)
         tk.Button(tb, text="▶ Watch Stream", command=self._info_watch_stream,
                   bg=BG3, fg=WHITE, font=("Segoe UI",9),
-                  relief="flat", padx=10, pady=4, cursor="hand2").pack(side="left", padx=4)
+                  relief="flat", padx=10, pady=4, cursor="hand2").pack(side="left", padx=8)
         tk.Button(tb, text="💾 Export", command=self._export_streamer_info,
                   bg=BG3, fg=WHITE, font=("Segoe UI",9),
                   relief="flat", padx=10, pady=4, cursor="hand2").pack(side="left", padx=4)
-        self.info_status_var = tk.StringVar(value="Enter a streamer username and click Load Info")
+        self.info_status_var = tk.StringVar(value="Streamer info loads automatically when monitoring starts")
         tk.Label(tb, textvariable=self.info_status_var, bg=BG2, fg=GREY,
                  font=("Segoe UI",9)).pack(side="right", padx=12)
+
+        # Auto-load when tab is selected
+        self.nb.bind("<<NotebookTabChanged>>", self._on_tab_changed)
 
         # ── Main content area: left card + right scrollable ───
         content = tk.Frame(f, bg=BG)
@@ -3339,6 +3442,20 @@ A NOTE ON CERTAINTY
         self._info_channel_data = None
 
     # ── Streamer Info: load & populate ───────────────────────
+
+    def _on_tab_changed(self, event=None):
+        """Auto-load streamer info when the Streamer Info tab is selected."""
+        try:
+            current = self.nb.tab(self.nb.select(), "text")
+            if "Streamer Info" in current:
+                # Only auto-load if we have a channel and haven't loaded yet
+                if self.channel and not self.info_slug_var.get():
+                    slug = self.channel.get("slug", "")
+                    if slug:
+                        self.info_slug_var.set(slug)
+                        self._load_streamer_info()
+        except Exception:
+            pass
 
     def _load_streamer_info(self):
         slug = self.info_slug_var.get().strip().lower()
@@ -4427,6 +4544,16 @@ A NOTE ON CERTAINTY
             self.ai_vb_run_btn.config(
                 state="normal", bg=ACCENT, fg="#000",
                 text="\u25b6 Run AI Analysis")
+        # Cancel auto scans
+        if hasattr(self, "_chatter_auto_id") and self._chatter_auto_id:
+            self.root.after_cancel(self._chatter_auto_id)
+            self._chatter_auto_id = None
+        if hasattr(self, "_words_auto_id") and self._words_auto_id:
+            self.root.after_cancel(self._words_auto_id)
+            self._words_auto_id = None
+        if hasattr(self, "_chart_auto_id") and self._chart_auto_id:
+            self.root.after_cancel(self._chart_auto_id)
+            self._chart_auto_id = None
         self.engine.stop()
         self.start_btn.config(state="normal")
         self.stop_btn.config(state="disabled")
@@ -4440,19 +4567,32 @@ A NOTE ON CERTAINTY
         slug = self.channel["slug"] if self.channel else "?"
         name = self.channel.get("display_name", slug) if self.channel else slug
         self.status_var.set(f"✓ Connected — monitoring kick.com/{slug}")
-        # Start the channel data polling loop (refreshes every 60s)
         self.root.after(30000, self._poll_channel)
+
+        # Start auto scans on connect
+        if hasattr(self, "chatter_auto_var") and self.chatter_auto_var.get():
+            self._chatter_auto_scan()
+        if hasattr(self, "words_auto_refresh_var") and self.words_auto_refresh_var.get():
+            self._words_schedule_refresh()
+        if hasattr(self, "chart_auto_var") and self.chart_auto_var.get():
+            self._chart_auto_scan()
+
+        # Auto-load streamer info
+        if self.channel:
+            slug = self.channel.get("slug", "")
+            if slug and hasattr(self, "info_slug_var"):
+                self.info_slug_var.set(slug)
+                self.root.after(1000, self._load_streamer_info)
+
         # Update the tab label in the main notebook to show streamer name
         try:
             live = "🔴" if self.channel and self.channel.get("is_live") else "📺"
             for tab_id in self.app.main_nb.tabs():
                 frame = self.app.main_nb.nametowidget(tab_id)
-                # Find which session owns this frame by checking children
                 for widget in frame.winfo_children():
                     if hasattr(widget, '_session_owner') and widget._session_owner is self:
                         self.app.main_nb.tab(tab_id, text=f"{live} {name}")
                         return
-            # Simpler fallback: update the currently selected tab
             selected = self.app.main_nb.select()
             if selected:
                 self.app.main_nb.tab(selected, text=f"{live} {name}")
