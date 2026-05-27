@@ -25,7 +25,7 @@ if sys.platform == "win32":
     except Exception:
         pass
 
-import json, re, time, threading, asyncio, urllib.request, ssl, argparse
+import json, re, time, threading, asyncio, urllib.request, ssl, argparse, webbrowser
 from collections import defaultdict, Counter
 from datetime import datetime, timezone
 import tkinter as tk
@@ -282,12 +282,14 @@ def parse_channel(data):
         "category":      cat,
         "duration":      duration_str,
         "started_at":    started_dt,
-        "slow_mode":     data.get("chatroom", {}).get("slow_mode", False),
-        "sub_mode":      data.get("chatroom", {}).get("subscribers_mode", False),
-        "emote_mode":    data.get("chatroom", {}).get("emotes_mode", False),
-        "social":        {p: data.get("user", {}).get(p, "") for p in
-                          ["twitter","youtube","instagram","discord","tiktok"]
-                          if data.get("user", {}).get(p)},
+        "slow_mode":      data.get("chatroom", {}).get("slow_mode", False),
+        "sub_mode":       data.get("chatroom", {}).get("subscribers_mode", False),
+        "emote_mode":     data.get("chatroom", {}).get("emotes_mode", False),
+        "followers_mode": (lambda fm: fm if isinstance(fm, bool) else fm.get("enabled", False))(
+                           data.get("chatroom", {}).get("followers_mode", False)),
+        "social":         {p: data.get("user", {}).get(p, "") for p in
+                           ["twitter","youtube","instagram","discord","tiktok"]
+                           if data.get("user", {}).get(p)},
     }
 
 # ══════════════════════════════════════════════════════════════
@@ -449,6 +451,14 @@ class ChatEngine:
                                 "pusher:connection_established",
                                 "pusher_internal:subscription_succeeded",
                                 "pusher:pong",
+                                "pusher:error",
+                                "App\\Events\\PollUpdateEvent",
+                                "App\\Events\\PollDeleteEvent",
+                                "App\\Events\\PollCreatedEvent",
+                                "App\\Events\\ViewerCountUpdated",
+                                "App\\Events\\StreamerIsLive",
+                                "App\\Events\\ChatroomUpdatedEvent",
+                                "App\\Events\\ChatMoveToSupportedChannelEvent",
                             ):
                                 p = env.get("data","{}");
                                 if isinstance(p, str):
@@ -589,9 +599,10 @@ class StreamerSession:
         self._current_hist_slug = ""
         self._vod_current_page  = 1
         self._clip_current_page = 1
-        self._countdown_secs    = 0   # remaining seconds on duration countdown
-        self._countdown_id      = None  # after() job id for countdown tick
-        self._ai_verdict_locked = False  # True after AI analysis — prevents numeric override
+        self._countdown_secs    = 0
+        self._countdown_id      = None
+        self._ai_verdict_locked = False
+        self._chat_buffer       = []  # must exist before _start is called
 
         self._build_session_topbar(parent_frame)
         main_area = tk.Frame(parent_frame, bg=BG)
@@ -692,6 +703,7 @@ class StreamerSession:
                  font=("Segoe UI",8,"bold")).pack(anchor="w", padx=12, pady=(10,2))
         flags = tk.Frame(left, bg=BG3)
         flags.pack(fill="x", padx=8, pady=2)
+        self.lbl_followers_mode = self._info_row(flags, "Followers Only","—")
         self.lbl_slow  = self._info_row(flags, "Slow Mode",    "—")
         self.lbl_sub   = self._info_row(flags, "Sub Only",     "—")
         self.lbl_emote = self._info_row(flags, "Emote Only",   "—")
@@ -3555,7 +3567,7 @@ A NOTE ON CERTAINTY
         self.info_bio_text.insert("end", bio)
         self.info_bio_text.config(state="disabled")
 
-        # Social links
+        # Social links — clickable
         for w in self.info_socials_frame.winfo_children():
             w.destroy()
         icons = {"twitter":"🐦","youtube":"▶","instagram":"📷",
@@ -3571,13 +3583,29 @@ A NOTE ON CERTAINTY
             for platform, url in socials.items():
                 if url:
                     icon = icons.get(platform.lower(),"🔗")
-                    row  = tk.Frame(self.info_socials_frame, bg=BG2)
+                    # Build full URL if only a handle was stored
+                    full_url = str(url)
+                    if not full_url.startswith("http"):
+                        url_map = {
+                            "twitter":   f"https://twitter.com/{url}",
+                            "youtube":   f"https://youtube.com/@{url}",
+                            "instagram": f"https://instagram.com/{url}",
+                            "tiktok":    f"https://tiktok.com/@{url}",
+                            "discord":   f"https://discord.gg/{url}",
+                            "facebook":  f"https://facebook.com/{url}",
+                        }
+                        full_url = url_map.get(platform.lower(), f"https://{url}")
+                    row = tk.Frame(self.info_socials_frame, bg=BG2)
                     row.pack(fill="x", pady=1)
                     tk.Label(row, text=f"{icon} {platform.title()}",
                              bg=BG2, fg=WHITE, font=("Segoe UI",8),
                              width=12, anchor="w").pack(side="left")
-                    tk.Label(row, text=str(url)[:25], bg=BG2, fg=BLUE,
-                             font=("Segoe UI",8), anchor="w").pack(side="left")
+                    lnk = tk.Label(row, text=str(url)[:25], bg=BG2, fg=BLUE,
+                                   font=("Segoe UI",8,"underline"), anchor="w",
+                                   cursor="hand2")
+                    lnk.pack(side="left")
+                    lnk.bind("<Button-1>", lambda e, u=full_url:
+                             webbrowser.open(u))
         else:
             tk.Label(self.info_socials_frame, text="No social links on profile",
                      bg=BG2, fg=GREY, font=("Segoe UI",8)).pack(anchor="w")
@@ -4625,6 +4653,7 @@ A NOTE ON CERTAINTY
         self.lbl_duration.set(ch["duration"])
         self.lbl_followers.set(f"{ch['followers']:,}")
         self.lbl_title.set(ch["stream_title"][:30])
+        self.lbl_followers_mode.set("On" if ch.get("followers_mode") else "Off")
         self.lbl_slow.set("On" if ch["slow_mode"] else "Off")
         self.lbl_sub.set("On" if ch["sub_mode"] else "Off")
         self.lbl_emote.set("On" if ch["emote_mode"] else "Off")
@@ -4939,7 +4968,12 @@ class KickGUI:
                 else:
                     data["followers_start"] = ch["followers_start"]
                 data["followers_prev"] = prev
+                # Preserve was_live tracking
+                data["_was_live"] = ch.get("_was_live", False)
                 self._multi_channels[slug] = data
+                # Check for live notification
+                self.root.after(0, lambda s=slug, d=data:
+                    self._multi_check_live(s, d))
                 if self.multi_track_var.get():
                     self._multi_history[slug].append((time.time(), data["followers"]))
             else:
@@ -4977,11 +5011,15 @@ class KickGUI:
     # ══════════════════════════════════════════════════════════
 
     def _multi_save(self):
-        """Save the current channel slug list to a local JSON file."""
+        """Save the current channel slug list and Auto Mon settings to JSON."""
         try:
             slugs = list(self._multi_channels.keys())
             with open(self._multi_save_path, "w", encoding="utf-8") as f:
-                json.dump({"channels": slugs}, f, indent=2)
+                json.dump({
+                    "channels":        slugs,
+                    "auto_mon_slugs":  list(self._auto_mon_slugs),
+                    "notify_enabled":  False,
+                }, f, indent=2)
         except Exception:
             pass
 
@@ -5071,8 +5109,7 @@ class KickGUI:
         found = next((r for r in self._top100_raw if r["name"] == name), None)
         if found:
             # Open in a new session tab
-            session = self._add_streamer_tab(found["slug"])
-            session._start()
+            self._open_streamer(found["slug"])
 
 
     def _sort_top100(self, col):
@@ -5250,7 +5287,6 @@ class KickGUI:
         frame = tk.Frame(self.main_nb, bg=BG)
         self.main_nb.add(frame, text=f"📺 {label}")
 
-        idx = len(self.sessions)
         session = StreamerSession(frame, self.root, self)
         tag_frame = tk.Frame(frame, width=0, height=0)
         tag_frame._session_owner = session
@@ -5260,6 +5296,31 @@ class KickGUI:
         self.sessions.append(session)
         self.main_nb.select(frame)
         return session
+
+    def _open_streamer(self, slug):
+        """Open a new tab for a slug and start monitoring."""
+        slug = slug.strip().lower()
+        session = self._add_streamer_tab(slug)
+        self.root.update()
+        self.root.update_idletasks()
+
+        def do_start():
+            session.slug_var.set(slug)
+            session.start_btn.config(state="disabled")
+            session.stop_btn.config(state="normal")
+            session.status_var.set(f"Fetching channel data for '{slug}'...")
+            session.engine.reset()
+            session._chat_buffer.clear()
+            session._viewer_history   = []
+            session._ai_verdict_locked = False
+            session._countdown_secs   = 600
+            session.dur_var.set("600")
+            session.dur_entry.config(fg=WHITE)
+            session._start_countdown()
+            threading.Thread(target=session._fetch_and_start,
+                             args=(slug,), daemon=True).start()
+
+        self.root.after(1000, do_start)
 
     def _multi_export_csv(self):
         if not self._multi_channels:
@@ -5544,34 +5605,51 @@ class KickGUI:
                        bg=BG2, fg=WHITE, selectcolor=BG3,
                        font=("Segoe UI",9)).pack(side="right", padx=4)
 
+        # Live Notifications / Auto Monitor Enable — displayed before Track Followers
+        self.multi_notify_var = tk.BooleanVar(value=False)
+        self.multi_notify_cb = tk.Checkbutton(
+            tb, text="🔔 Live Notifications/Auto Monitor Enable",
+            variable=self.multi_notify_var,
+            bg=BG2, fg=ACCENT, selectcolor=BG3,
+            font=("Segoe UI",9,"bold"),
+            command=self._multi_notify_toggle)
+        self.multi_notify_cb.pack(side="right", padx=8)
+
         self.multi_status = tk.StringVar(value="Add streamers to monitor multiple channels at once")
         tk.Label(f, textvariable=self.multi_status, bg=BG, fg=GREY,
                  font=("Segoe UI",9)).pack(anchor="w", padx=8, pady=2)
 
-        # Treeview
-        cols = ("Streamer","Status","Viewers","Category","Followers","Δ Followers","Last Updated")
+        # Treeview — added Auto Mon column
+        cols = ("Streamer","Status","Viewers","Category","Followers","Δ Followers","Last Updated","Auto Mon")
         self.multi_tree = ttk.Treeview(f, columns=cols, show="headings", selectmode="browse")
-        widths = [160, 80, 90, 150, 100, 100, 150]
+        widths = [150, 75, 85, 140, 90, 90, 140, 75]
         for col, w in zip(cols, widths):
             self.multi_tree.heading(col, text=col,
                 command=lambda c=col: self._multi_sort(c))
-            self.multi_tree.column(col, width=w, anchor="w")
+            self.multi_tree.column(col, width=w, anchor="center" if col == "Auto Mon" else "w")
         self._style_tree(self.multi_tree)
         self.multi_tree.tag_configure("live",    foreground=ACCENT)
         self.multi_tree.tag_configure("offline", foreground=GREY)
         self.multi_tree.tag_configure("error",   foreground=RED)
         self.multi_tree.bind("<Double-1>", self._multi_open)
+        self.multi_tree.bind("<Button-1>", self._multi_tree_click)
 
         # Sort state — default to Status descending (LIVE first)
         self._multi_sort_col = "Status"
         self._multi_sort_rev = True
+
+        # Track notification state and Auto Mon settings
+        self._notified_live   = set()   # slugs we've already notified about
+        self._auto_mon_slugs  = set()   # slugs with Auto Mon ticked
+        self._notify_popups   = []      # active notification windows
+        self._multi_auto_mon  = {}      # slug -> BooleanVar
 
         sb = ttk.Scrollbar(f, orient="vertical", command=self.multi_tree.yview)
         self.multi_tree.configure(yscroll=sb.set)
         self.multi_tree.pack(side="left", fill="both", expand=True, padx=(4,0), pady=4)
         sb.pack(side="right", fill="y", pady=4, padx=(0,4))
 
-        tk.Label(f, text="Double-click a channel to open it in Live Monitor",
+        tk.Label(f, text="Double-click a channel to open in Live Monitor  |  Click Auto Mon column to toggle auto-monitoring",
                  bg=BG, fg=GREY, font=("Segoe UI",8)).pack(pady=(0,4))
 
         # Scheduled report controls
@@ -5814,8 +5892,7 @@ class KickGUI:
         vals = self.multi_tree.item(sel[0], "values")
         slug = vals[0].strip() if vals else ""
         if slug:
-            session = self._add_streamer_tab(slug)
-            session._start()
+            self._open_streamer(slug)
 
 
     def _multi_sort(self, col):
@@ -5872,22 +5949,192 @@ class KickGUI:
             ts       = ch.get("last_updated","Never")
             if isinstance(ts, float):
                 ts = datetime.fromtimestamp(ts).strftime("%H:%M:%S")
-            self.multi_tree.insert("","end", tags=(tag,), values=(
-                slug,
-                status,
+            auto_mon = "✅" if slug in self._auto_mon_slugs else "☐"
+            self.multi_tree.insert("","end", iid=slug, tags=(tag,), values=(
+                slug, status,
                 f"{ch.get('viewers',0):,}" if is_live else "—",
                 ch.get("category","N/A"),
-                f"{flw:,}",
-                delta_s,
-                ts,
+                f"{flw:,}", delta_s, ts,
+                auto_mon,
             ))
         n_live = sum(1 for ch in self._multi_channels.values() if ch.get("is_live"))
         self.multi_status.set(
             f"{len(self._multi_channels)} channels tracked  |  {n_live} live now")
 
-        # Re-apply current sort after render (default: Status ▲ keeps LIVE on top)
+        # Re-apply current sort after render
         if self._multi_sort_col:
             self._multi_sort_apply()
+
+    def _multi_tree_click(self, event):
+        """Handle click on Auto Mon column to toggle it."""
+        region = self.multi_tree.identify_region(event.x, event.y)
+        if region != "cell":
+            return
+        col  = self.multi_tree.identify_column(event.x)
+        item = self.multi_tree.identify_row(event.y)
+        # Column #8 = Auto Mon
+        if col == "#8" and item:
+            slug = item  # we use slug as iid
+            if slug in self._auto_mon_slugs:
+                self._auto_mon_slugs.discard(slug)
+            else:
+                self._auto_mon_slugs.add(slug)
+            self._multi_save_settings()
+            self._multi_render()
+
+    def _multi_notify_toggle(self):
+        """Enable or disable Live Notifications — greys out Auto Mon when off."""
+        enabled = self.multi_notify_var.get()
+        state = "normal" if enabled else "disabled"
+        # Re-render to update Auto Mon column appearance
+        self._multi_render()
+
+    def _multi_check_live(self, slug, ch):
+        """Called after each channel refresh — fire notification if newly live."""
+        is_live = ch.get("is_live", False)
+        was_live = ch.get("_was_live", False)
+
+        if is_live and not was_live:
+            # Channel just went live
+            if slug in self._auto_mon_slugs and self.multi_notify_var.get():
+                # Auto Mon — open tab and start silently
+                self.root.after(0, lambda s=slug: self._multi_auto_start(s, ch))
+            elif self.multi_notify_var.get() and slug not in self._notified_live:
+                # Show notification popup
+                self._notified_live.add(slug)
+                self.root.after(0, lambda s=slug, c=dict(ch): self._show_live_popup(s, c))
+
+        if not is_live and was_live:
+            # Channel went offline — reset so it can notify again next time
+            self._notified_live.discard(slug)
+
+        # Track previous state
+        ch["_was_live"] = is_live
+
+    def _multi_auto_start(self, slug, ch):
+        """Silently open a new session tab and start monitoring."""
+        self._open_streamer(slug)
+
+    def _show_live_popup(self, slug, ch):
+        """Show a notification popup in the bottom right corner."""
+        name     = ch.get("display_name", slug)
+        category = ch.get("category", "N/A")
+        viewers  = ch.get("viewers", 0)
+
+        popup = tk.Toplevel(self.root)
+        popup.overrideredirect(True)  # no title bar
+        popup.attributes("-topmost", True)
+        popup.configure(bg=BG2)
+
+        # Position bottom right — stack upward if multiple popups
+        sw = self.root.winfo_screenwidth()
+        sh = self.root.winfo_screenheight()
+        pw, ph = 320, 160
+        offset = len(self._notify_popups) * (ph + 8)
+        x = sw - pw - 16
+        y = sh - ph - 48 - offset
+        popup.geometry(f"{pw}x{ph}+{x}+{y}")
+
+        # Border frame
+        border = tk.Frame(popup, bg=ACCENT, bd=2)
+        border.pack(fill="both", expand=True, padx=2, pady=2)
+
+        inner = tk.Frame(border, bg=BG2)
+        inner.pack(fill="both", expand=True, padx=1, pady=1)
+
+        # Header
+        tk.Label(inner, text="🔴  LIVE NOW", bg=BG2, fg=ACCENT,
+                 font=("Segoe UI",9,"bold")).pack(pady=(8,2))
+
+        # Channel info
+        tk.Label(inner, text=name, bg=BG2, fg=WHITE,
+                 font=("Consolas",13,"bold")).pack()
+        tk.Label(inner, text=f"{category}  •  {viewers:,} viewers",
+                 bg=BG2, fg=GREY, font=("Segoe UI",9)).pack(pady=(2,8))
+
+        # Countdown label stored on popup for easy access
+        cd_label = tk.Label(inner, text="45s", bg=BG2, fg=GREY,
+                            font=("Segoe UI",8))
+        cd_label.place(relx=1.0, rely=0, anchor="ne", x=-6, y=4)
+        popup._cd_label = cd_label
+
+        # Buttons
+        btn_frame = tk.Frame(inner, bg=BG2)
+        btn_frame.pack(pady=(0,8))
+
+        def monitor():
+            self._close_popup(popup)
+            self._open_streamer(slug)
+
+        def dismiss():
+            self._close_popup(popup)
+
+        tk.Button(btn_frame, text="✅ Monitor",
+                  command=monitor,
+                  bg=ACCENT, fg="#000", font=("Segoe UI",9,"bold"),
+                  relief="flat", padx=12, pady=4,
+                  cursor="hand2").pack(side="left", padx=6)
+        tk.Button(btn_frame, text="✗ Dismiss",
+                  command=dismiss,
+                  bg=BG3, fg=WHITE, font=("Segoe UI",9),
+                  relief="flat", padx=12, pady=4,
+                  cursor="hand2").pack(side="left", padx=6)
+
+        self._notify_popups.append(popup)
+        popup.protocol("WM_DELETE_WINDOW", dismiss)
+
+        # Start countdown
+        self._popup_tick(popup, 45)
+
+    def _popup_tick(self, popup, remaining):
+        """Countdown timer for notification popup."""
+        try:
+            if not popup.winfo_exists():
+                return
+            if remaining <= 0:
+                self._close_popup(popup)
+                return
+            if hasattr(popup, "_cd_label"):
+                popup._cd_label.config(text=f"{remaining}s")
+            popup.after(1000, lambda r=remaining-1:
+                self._popup_tick(popup, r))
+        except Exception:
+            pass
+
+    def _close_popup(self, popup):
+        """Close a notification popup and reposition remaining ones."""
+        try:
+            if popup in self._notify_popups:
+                self._notify_popups.remove(popup)
+            popup.destroy()
+        except Exception:
+            pass
+        # Reposition remaining popups
+        sw = self.root.winfo_screenwidth()
+        sh = self.root.winfo_screenheight()
+        pw, ph = 320, 160
+        for i, p in enumerate(self._notify_popups):
+            try:
+                x = sw - pw - 16
+                y = sh - ph - 48 - (i * (ph + 8))
+                p.geometry(f"{pw}x{ph}+{x}+{y}")
+            except Exception:
+                pass
+
+    def _multi_save_settings(self):
+        """Save Auto Mon slugs to multi_channels.json."""
+        try:
+            path = os.path.join(APP_DIR, "multi_channels.json")
+            data = {}
+            if os.path.exists(path):
+                with open(path, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+            data["auto_mon_slugs"] = list(self._auto_mon_slugs)
+            data["notify_enabled"] = False
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump(data, f, indent=2)
+        except Exception:
+            pass
 
 
     def _build_topbar(self):
@@ -5940,7 +6187,7 @@ class KickGUI:
 
 
     def _multi_load_saved(self):
-        """Load saved channel slugs from local JSON and fetch their data."""
+        """Load saved channel slugs and Auto Mon settings from local JSON."""
         try:
             if not os.path.exists(self._multi_save_path):
                 return
@@ -5949,6 +6196,10 @@ class KickGUI:
             slugs = data.get("channels", [])
             if not slugs:
                 return
+            # Restore Auto Mon slugs and notification setting
+            self._auto_mon_slugs = set(data.get("auto_mon_slugs", []))
+            notify = data.get("notify_enabled", False)
+            self.multi_notify_var.set(notify)
             for slug in slugs:
                 self._multi_channels[slug] = {
                     "slug": slug, "status": "...", "viewers": 0,
