@@ -138,6 +138,16 @@ account or API key required.
     Real-time chat. Colour coded badges.
     Filter by text, hide bots, pause scroll, badge filters,
     Spammers filter, Exclude Emotes option.
+    @ Mentions filter — shows only messages containing @
+    💬 Replies filter — shows only Kick reply events
+    Both filters use OR logic when ticked together.
+
+    Live Chat Logging (center of toolbar):
+      ▶ Start      Begin recording chat to a .txt file
+      ■ Stop       Stop recording
+      ☐ Auto Log   Auto-starts recording when monitoring begins
+                   State saved per streamer across app restarts
+      🔴 REC       Pulses in session topbar when recording is active
 
   🤖 AI ANALYSIS
     AI viewbot detection. Locked for 10 minutes after START.
@@ -188,6 +198,25 @@ account or API key required.
   📄 REPORT
     Full session report — generate and save as text file.
 
+  💾 CHAT LOGS
+    Save and review live chat session recordings.
+
+    Filter bar:
+      Filter 1/2/3   Filter Filtered Chat by username
+      Keyword        Search message content — results in Filtered Chat
+      @ Mentions     Show messages containing @ in Filtered Chat
+      💬 Replies     Show Kick reply events in Filtered Chat
+      ✕ Clear        Clear all filters
+
+    Chat Log panel (left)    Full unfiltered chat log
+    Filtered Chat panel (right)  Messages matching active filters
+
+    Save folder:
+      Browse to set your base save folder — remembered across restarts
+      Auto-creates a subfolder named after the streamer
+      Load Chat Log opens directly in the streamer subfolder
+      System folders are blocked for safety
+
   📖 AI GUIDE
     Built-in reference guide — embedded in the app.
     Covers how AI models work, GPU tiers, scoring and reading results.
@@ -208,10 +237,16 @@ account or API key required.
     Saved list restored on every launch.
     Double-click any row to open in Live Monitor.
 
-    Auto Mon column (far right):
+    Auto Mon column:
       Tick any channel to automatically open a monitor tab and
       start monitoring when that channel goes live.
       Requires Live Notifications/Auto Monitor Enable to be ticked.
+
+    Auto Log column (far right):
+      Tick any channel to automatically start chat recording when
+      that streamer is being monitored.
+      Synced two-way with the Auto Log checkbox in Live Chat tab.
+      State saved per streamer across app restarts.
 
     🔔 Live Notifications/Auto Monitor Enable:
       When ticked — shows a popup notification in the bottom right
@@ -290,6 +325,8 @@ account or API key required.
   - WebSocket reconnects silently if dropped
   - Anthropic API costs approximately $0.03 per full analysis
   - The AI Guide tab is embedded — no external file needed
+  - Chat log files saved as [base folder]\[streamer]\chatlog_slug_timestamp.txt
+  - Auto Log state is saved per streamer in chatlog_settings.json
   - Do not submit your compiled exe to VirusTotal
   - This tool is not affiliated with or endorsed by Kick.com
 

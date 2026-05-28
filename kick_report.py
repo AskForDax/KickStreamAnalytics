@@ -8,13 +8,35 @@ import sys, os
 
 # Resolve app directory correctly for both .py and PyInstaller .exe
 if getattr(sys, 'frozen', False):
-    # Running as compiled exe — use the exe's directory
     APP_DIR = os.path.dirname(sys.executable)
 else:
-    # Running as .py script
     APP_DIR = os.path.dirname(os.path.abspath(__file__))
 
 sys.path.insert(0, os.path.join(APP_DIR, 'packages'))
+
+# ── Chat log folder — persists across all sessions and restarts ──────────────
+_CHATLOG_SETTINGS_PATH = os.path.join(APP_DIR, "chatlog_settings.json")
+
+def _load_chatlog_folder():
+    """Load the saved chat log base folder. Returns APP_DIR if not set."""
+    try:
+        if os.path.exists(_CHATLOG_SETTINGS_PATH):
+            with open(_CHATLOG_SETTINGS_PATH, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            folder = data.get("base_folder", "")
+            if folder and os.path.isdir(folder):
+                return folder
+    except Exception:
+        pass
+    return APP_DIR
+
+def _save_chatlog_folder(folder):
+    """Save the chat log base folder permanently."""
+    try:
+        with open(_CHATLOG_SETTINGS_PATH, "w", encoding="utf-8") as f:
+            json.dump({"base_folder": folder}, f, indent=2)
+    except Exception:
+        pass
 
 # Hide the console window on Windows
 if sys.platform == "win32":
@@ -325,8 +347,21 @@ class ChatEngine:
         content = payload.get("content", "")
         badges  = [b.get("text","") for b in
                    sender.get("identity",{}).get("badges",[]) if b.get("text")]
+
+        # Capture reply data — Kick sends replied_to or replies_to
+        reply_data    = (payload.get("replied_to") or
+                         payload.get("replies_to") or
+                         payload.get("metadata",{}).get("original_sender") or {})
+        is_reply      = bool(reply_data)
+        reply_to_user = ""
+        if is_reply and isinstance(reply_data, dict):
+            reply_to_user = (reply_data.get("username") or
+                             reply_data.get("slug") or
+                             reply_data.get("sender",{}).get("username","") or "")
+
         msg = {"username": name, "content": content,
-               "timestamp": now, "badges": badges}
+               "timestamp": now, "badges": badges,
+               "is_reply": is_reply, "reply_to_user": reply_to_user}
         self.messages.append(msg)
         self.user_msgs[name].append(content)
         if name not in self.user_first:
@@ -602,7 +637,13 @@ class StreamerSession:
         self._countdown_secs    = 0
         self._countdown_id      = None
         self._ai_verdict_locked = False
-        self._chat_buffer       = []  # must exist before _start is called
+        self._chat_buffer       = []
+        self._chatlog_recording  = False
+        self._chatlog_file       = None
+        self._chatlog_messages   = []
+        self._chatlog_sort_state = {}
+        self._chatlog_pulse_on   = False
+        self.chatlog_filter3_var = None
 
         self._build_session_topbar(parent_frame)
         main_area = tk.Frame(parent_frame, bg=BG)
@@ -657,6 +698,11 @@ class StreamerSession:
                   command=lambda: self.app._close_session(self),
                   bg=BG3, fg=GREY, font=("Segoe UI",8),
                   relief="flat", padx=6, pady=2, cursor="hand2").pack(side="right", padx=6)
+
+        # Recording indicator — always visible in topbar
+        self.chatlog_rec_label = tk.Label(bar, text="", bg=BG2,
+                  font=("Segoe UI",9,"bold"))
+        self.chatlog_rec_label.pack(side="right", padx=8)
 
         self.status_var = tk.StringVar(value="Enter a streamer name and press START")
         tk.Label(bar, textvariable=self.status_var, bg=BG2, fg=GREY,
@@ -781,6 +827,7 @@ class StreamerSession:
         self._build_streamer_info_tab()
         self._build_history_tab()
         self._build_report_tab()
+        self._build_chat_savelog_tab()
         self._build_guide_tab()
 
     # ── Tab: Live Chat ────────────────────────────────────────
@@ -814,6 +861,34 @@ class StreamerSession:
         tk.Button(toolbar, text="▶ Watch Stream", command=self._open_stream,
                   bg=ACCENT, fg="#000", font=("Segoe UI",9,"bold"),
                   relief="flat", padx=10, pady=2, cursor="hand2").pack(side="right", padx=4, pady=4)
+
+        # Chat log record controls — centered
+        center_frame = tk.Frame(toolbar, bg=BG2)
+        center_frame.pack(side="left", expand=True)
+
+        tk.Label(center_frame, text="Live Chat Logging:", bg=BG2, fg=GREY,
+                 font=("Segoe UI",8)).pack(side="left", padx=(0,6))
+
+        self.chatlog_start_btn = tk.Button(center_frame, text="▶ Start",
+                  command=self._chatlog_start,
+                  bg=BG3, fg=WHITE, font=("Segoe UI",9,"bold"),
+                  relief="flat", padx=8, pady=2, cursor="hand2")
+        self.chatlog_start_btn.pack(side="left", padx=2, pady=4)
+
+        self.chatlog_stop_btn = tk.Button(center_frame, text="■ Stop",
+                  command=self._chatlog_stop,
+                  bg=RED, fg=WHITE, font=("Segoe UI",9,"bold"),
+                  relief="flat", padx=8, pady=2, cursor="hand2",
+                  state="disabled")
+        self.chatlog_stop_btn.pack(side="left", padx=2, pady=4)
+
+        self.chatlog_auto_var = tk.BooleanVar(value=False)
+        tk.Checkbutton(center_frame, text="Auto Log",
+                       variable=self.chatlog_auto_var,
+                       bg=BG2, fg=WHITE, selectcolor=BG3,
+                       font=("Segoe UI",9),
+                       command=self._chatlog_auto_toggle
+                       ).pack(side="left", padx=6)
 
         # ── Toolbar row 2: badge/role filters ────────────────
         tb2 = tk.Frame(f, bg=BG3)
@@ -855,6 +930,25 @@ class StreamerSession:
                        font=("Segoe UI",9),
                        command=self._apply_chat_filter_now).pack(side="right", padx=4, pady=3)
 
+        # Separator
+        tk.Frame(tb2, bg=BG2, width=2).pack(side="right", fill="y", pady=2, padx=4)
+
+        # Filter Replies tick box
+        self.filter_replies_var = tk.BooleanVar(value=False)
+        tk.Checkbutton(tb2, text="💬 Replies", variable=self.filter_replies_var,
+                       bg=BG3, fg=YELLOW, selectcolor=BG2,
+                       activebackground=BG3, activeforeground=YELLOW,
+                       font=("Segoe UI",9,"bold"),
+                       command=self._apply_chat_filter_now).pack(side="right", padx=4, pady=3)
+
+        # Filter @mentions tick box
+        self.filter_mentions_var = tk.BooleanVar(value=False)
+        tk.Checkbutton(tb2, text="@ Mentions", variable=self.filter_mentions_var,
+                       bg=BG3, fg=ACCENT, selectcolor=BG2,
+                       activebackground=BG3, activeforeground=ACCENT,
+                       font=("Segoe UI",9,"bold"),
+                       command=self._apply_chat_filter_now).pack(side="right", padx=4, pady=3)
+
         self.chat_box = scrolledtext.ScrolledText(
             f, bg=CHATBG, fg=WHITE, font=("Consolas",10),
             state="disabled", wrap="word", relief="flat",
@@ -862,8 +956,9 @@ class StreamerSession:
         self.chat_box.pack(fill="both", expand=True)
 
         # Tags for colouring
-        self.chat_box.tag_config("time",    foreground=GREY)
-        self.chat_box.tag_config("name",    foreground=ACCENT)
+        self.chat_box.tag_config("time",      foreground=GREY)
+        self.chat_box.tag_config("reply_tag", foreground=YELLOW, font=("Consolas",10,"bold"))
+        self.chat_box.tag_config("name",      foreground=ACCENT)
         self.chat_box.tag_config("mod",     foreground=YELLOW)
         self.chat_box.tag_config("sub",     foreground=ACCENT2)
         self.chat_box.tag_config("vip",     foreground=YELLOW)
@@ -910,6 +1005,10 @@ class StreamerSession:
         if len(self._chat_buffer) > 2000:
             self._chat_buffer = self._chat_buffer[-2000:]
 
+        # Auto-save to chat log if recording
+        if hasattr(self, "_chatlog_recording") and self._chatlog_recording:
+            self._chatlog_record(msg)
+
         filt     = self.chat_filter.get().lower()
         hidebots = self.hide_bots_var.get()
 
@@ -923,7 +1022,8 @@ class StreamerSession:
 
         if hidebots and is_bot:
             return
-        if filt and filt not in msg["username"].lower()                 and filt not in msg["content"].lower():
+        if filt and filt not in msg["username"].lower() \
+                and filt not in msg["content"].lower():
             return
         if not self._msg_passes_badge_filter(msg):
             return
@@ -932,6 +1032,17 @@ class StreamerSession:
         show_spam = getattr(self, "show_spammers_var", None)
         if show_spam and show_spam.get():
             if not self._is_spammer(msg["username"]):
+                return
+
+        # Filter @mentions and/or Replies — OR logic when both ticked
+        filter_mentions = getattr(self, "filter_mentions_var", None)
+        filter_replies  = getattr(self, "filter_replies_var", None)
+        want_mentions   = filter_mentions and filter_mentions.get()
+        want_replies    = filter_replies  and filter_replies.get()
+        if want_mentions or want_replies:
+            passes_mention = want_mentions and "@" in msg.get("content", "")
+            passes_reply   = want_replies  and msg.get("is_reply", False)
+            if not (passes_mention or passes_reply):
                 return
 
         badges   = msg.get("badges", [])
@@ -947,6 +1058,8 @@ class StreamerSession:
         cb.config(state="normal")
         ts        = datetime.fromtimestamp(msg["timestamp"]).strftime("%H:%M:%S")
         badges    = msg.get("badges", [])
+        is_reply  = msg.get("is_reply", False)
+        reply_to  = msg.get("reply_to_user", "")
         if name_tag is None:
             name_tag = ("bot" if is_bot else
                         "mod" if "Moderator" in badges else
@@ -954,11 +1067,13 @@ class StreamerSession:
                         else "name")
         badge_str = " ".join(f"[{b}]" for b in badges) + " " if badges else ""
         cb.insert("end", f"[{ts}] ", "time")
+        # Show reply indicator if this is a reply
+        if is_reply and reply_to:
+            cb.insert("end", f"↩@{reply_to} ", "reply_tag")
         cb.insert("end", badge_str, name_tag)
         cb.insert("end", msg["username"], name_tag)
         cb.insert("end", ": ", "colon")
         cb.insert("end", msg["content"] + "\n", "msg")
-
         cb.config(state="disabled")
         if not self.pause_chat_var.get():
             cb.see("end")
@@ -1008,6 +1123,16 @@ class StreamerSession:
             if show_spam and show_spam.get():
                 if not self._is_spammer(msg["username"]):
                     continue
+            # Filter @mentions and/or Replies — OR logic when both ticked
+            filter_mentions = getattr(self, "filter_mentions_var", None)
+            filter_replies  = getattr(self, "filter_replies_var", None)
+            want_mentions   = filter_mentions and filter_mentions.get()
+            want_replies    = filter_replies  and filter_replies.get()
+            if want_mentions or want_replies:
+                passes_mention = want_mentions and "@" in msg.get("content", "")
+                passes_reply   = want_replies  and msg.get("is_reply", False)
+                if not (passes_mention or passes_reply):
+                    continue
             filtered.append((msg, is_bot))
 
         cb = self.chat_box
@@ -1015,15 +1140,19 @@ class StreamerSession:
         cb.delete("1.0", "end")
 
         for msg, is_bot in filtered:
-            badges   = msg.get("badges", [])
-            name_tag = ("bot"  if is_bot else
-                        "mod"  if "Moderator" in badges else
-                        "vip"  if any("VIP" in b or "vip" in b.lower() for b in badges) else
-                        "sub"  if any("Sub" in b or "sub" in b for b in badges)
-                        else "name")
+            badges    = msg.get("badges", [])
+            is_reply  = msg.get("is_reply", False)
+            reply_to  = msg.get("reply_to_user", "")
+            name_tag  = ("bot"  if is_bot else
+                         "mod"  if "Moderator" in badges else
+                         "vip"  if any("VIP" in b or "vip" in b.lower() for b in badges) else
+                         "sub"  if any("Sub" in b or "sub" in b for b in badges)
+                         else "name")
             ts        = datetime.fromtimestamp(msg["timestamp"]).strftime("%H:%M:%S")
             badge_str = " ".join(f"[{b}]" for b in badges) + " " if badges else ""
             cb.insert("end", f"[{ts}] ", "time")
+            if is_reply and reply_to:
+                cb.insert("end", f"↩@{reply_to} ", "reply_tag")
             cb.insert("end", badge_str, name_tag)
             cb.insert("end", msg["username"], name_tag)
             cb.insert("end", ": ", "colon")
@@ -1101,6 +1230,510 @@ class StreamerSession:
 
 
     # ── Tab: AI Analysis ──────────────────────────────────────
+    # ── Tab: Chat Save/Load ───────────────────────────────────
+    def _build_chat_savelog_tab(self):
+        f = tk.Frame(self.nb, bg=BG)
+        self.nb.add(f, text="💾 Chat Logs")
+
+        # ── Top toolbar ───────────────────────────────────────
+        tb = tk.Frame(f, bg=BG2)
+        tb.pack(fill="x")
+
+        # Load controls
+        load_frame = tk.Frame(tb, bg=BG2)
+        load_frame.pack(side="left", padx=8, pady=5)
+        tk.Label(load_frame, text="LOAD:", bg=BG2, fg=GREY,
+                 font=("Segoe UI",8,"bold")).pack(side="left", padx=(0,6))
+        tk.Button(load_frame, text="📂 Load Chat Log",
+                  command=self._chatlog_load,
+                  bg=ACCENT2, fg="#000", font=("Segoe UI",9,"bold"),
+                  relief="flat", padx=10, pady=3,
+                  cursor="hand2").pack(side="left", padx=3)
+
+        # Separator
+        tk.Frame(tb, bg=BG3, width=2).pack(side="left", fill="y", pady=4)
+
+        # Folder browse
+        folder_frame = tk.Frame(tb, bg=BG2)
+        folder_frame.pack(side="left", padx=8, pady=5)
+        tk.Label(folder_frame, text="Save to:", bg=BG2, fg=GREY,
+                 font=("Segoe UI",8)).pack(side="left", padx=(0,4))
+        self.chatlog_folder_var = tk.StringVar(value=_load_chatlog_folder())
+        tk.Entry(folder_frame, textvariable=self.chatlog_folder_var, width=24,
+                 bg=BG3, fg=WHITE, insertbackground=WHITE,
+                 font=("Segoe UI",8), relief="flat").pack(side="left", padx=2)
+        tk.Button(folder_frame, text="📁 Browse",
+                  command=self._chatlog_browse,
+                  bg=BG3, fg=WHITE, font=("Segoe UI",8),
+                  relief="flat", padx=6, pady=3,
+                  cursor="hand2").pack(side="left", padx=4)
+
+        # Status bar
+        self.chatlog_status_var = tk.StringVar(
+            value="Use ▶ Start / ■ Stop in the Live Chat tab to record")
+        tk.Label(tb, textvariable=self.chatlog_status_var,
+                 bg=BG2, fg=GREY, font=("Segoe UI",8)).pack(side="right", padx=12)
+
+        # ── Filter row — 3 filter boxes ───────────────────────
+        filter_bar = tk.Frame(f, bg=BG3)
+        filter_bar.pack(fill="x")
+
+        FILTER_COLORS = [ACCENT, YELLOW, "#ff88ff"]
+        for i, (label, attr, color) in enumerate([
+            ("Filter 1:", "chatlog_filter1_var", FILTER_COLORS[0]),
+            ("Filter 2:", "chatlog_filter2_var", FILTER_COLORS[1]),
+            ("Filter 3:", "chatlog_filter3_var", FILTER_COLORS[2]),
+        ]):
+            tk.Label(filter_bar, text=f"  {label}",
+                     bg=BG3, fg=WHITE, font=("Segoe UI",9)).pack(
+                     side="left", padx=(8 if i==0 else 12, 4), pady=4)
+            var = tk.StringVar()
+            var.trace("w", lambda *_, v=var: self._chatlog_apply_filters())
+            setattr(self, attr, var)
+            tk.Entry(filter_bar, textvariable=var, width=16,
+                     bg=BG2, fg=color, insertbackground=WHITE,
+                     font=("Segoe UI",9), relief="flat").pack(side="left", padx=2)
+
+        tk.Button(filter_bar, text="✕ Clear",
+                  command=self._chatlog_clear_filters,
+                  bg=BG2, fg=GREY, font=("Segoe UI",8),
+                  relief="flat", padx=6, pady=2).pack(side="left", padx=10)
+
+        # Keyword search box
+        tk.Frame(filter_bar, bg=BG2, width=2).pack(side="left", fill="y", pady=2, padx=4)
+        tk.Label(filter_bar, text="Keyword:",
+                 bg=BG3, fg=WHITE, font=("Segoe UI",9)).pack(side="left", padx=(4,2), pady=4)
+        self.chatlog_keyword_var = tk.StringVar()
+        self.chatlog_keyword_var.trace("w", lambda *_: self._chatlog_apply_filters())
+        tk.Entry(filter_bar, textvariable=self.chatlog_keyword_var, width=16,
+                 bg=BG2, fg="#ff88ff", insertbackground=WHITE,
+                 font=("Segoe UI",9), relief="flat").pack(side="left", padx=2)
+
+        # Separator
+        tk.Frame(filter_bar, bg=BG2, width=2).pack(side="left", fill="y", pady=2, padx=4)
+
+        # @ Mentions and Replies tick boxes
+        self.chatlog_filter_mentions_var = tk.BooleanVar(value=False)
+        tk.Checkbutton(filter_bar, text="@ Mentions",
+                       variable=self.chatlog_filter_mentions_var,
+                       bg=BG3, fg=ACCENT, selectcolor=BG2,
+                       activebackground=BG3, activeforeground=ACCENT,
+                       font=("Segoe UI",9,"bold"),
+                       command=self._chatlog_apply_filters
+                       ).pack(side="left", padx=4)
+
+        self.chatlog_filter_replies_var = tk.BooleanVar(value=False)
+        tk.Checkbutton(filter_bar, text="💬 Replies",
+                       variable=self.chatlog_filter_replies_var,
+                       bg=BG3, fg=YELLOW, selectcolor=BG2,
+                       activebackground=BG3, activeforeground=YELLOW,
+                       font=("Segoe UI",9,"bold"),
+                       command=self._chatlog_apply_filters
+                       ).pack(side="left", padx=4)
+
+        self.chatlog_count_var = tk.StringVar(value="")
+        tk.Label(filter_bar, textvariable=self.chatlog_count_var,
+                 bg=BG3, fg=GREY, font=("Segoe UI",8)).pack(side="right", padx=10)
+
+        # ── Side by side panels ───────────────────────────────
+        panels = tk.Frame(f, bg=BG)
+        panels.pack(fill="both", expand=True, padx=4, pady=4)
+
+        # Left panel — Chatter 1
+        left = tk.Frame(panels, bg=BG)
+        left.pack(side="left", fill="both", expand=True, padx=(0,2))
+
+        tk.Label(left, text="Chat Log", bg=BG2, fg=ACCENT,
+                 font=("Segoe UI",9,"bold")).pack(fill="x", padx=2)
+
+        cols1 = ("Time","Username","Message")
+        self.chatlog_tree1 = ttk.Treeview(left, columns=cols1,
+                                           show="headings", selectmode="browse")
+        self.chatlog_tree1.heading("Time",     text="Time",
+                                   command=lambda: self._chatlog_sort(self.chatlog_tree1, "Time"))
+        self.chatlog_tree1.heading("Username", text="Username",
+                                   command=lambda: self._chatlog_sort(self.chatlog_tree1, "Username"))
+        self.chatlog_tree1.heading("Message",  text="Message",
+                                   command=lambda: self._chatlog_sort(self.chatlog_tree1, "Message"))
+        self.chatlog_tree1.column("Time",     width=70,  anchor="w")
+        self.chatlog_tree1.column("Username", width=110, anchor="w")
+        self.chatlog_tree1.column("Message",  width=300, anchor="w")
+        self._style_tree(self.chatlog_tree1)
+        self.chatlog_tree1.tag_configure("user1", foreground=ACCENT)
+
+        sb1 = ttk.Scrollbar(left, orient="vertical",
+                             command=self.chatlog_tree1.yview)
+        self.chatlog_tree1.configure(yscroll=sb1.set)
+        self.chatlog_tree1.pack(side="left", fill="both", expand=True)
+        sb1.pack(side="right", fill="y")
+
+        # Right panel — Chatter 2
+        right = tk.Frame(panels, bg=BG)
+        right.pack(side="left", fill="both", expand=True, padx=(2,0))
+
+        tk.Label(right, text="Filtered Chat", bg=BG2, fg=YELLOW,
+                 font=("Segoe UI",9,"bold")).pack(fill="x", padx=2)
+
+        cols2 = ("Time","Username","Message")
+        self.chatlog_tree2 = ttk.Treeview(right, columns=cols2,
+                                           show="headings", selectmode="browse")
+        self.chatlog_tree2.heading("Time",     text="Time",
+                                   command=lambda: self._chatlog_sort(self.chatlog_tree2, "Time"))
+        self.chatlog_tree2.heading("Username", text="Username",
+                                   command=lambda: self._chatlog_sort(self.chatlog_tree2, "Username"))
+        self.chatlog_tree2.heading("Message",  text="Message",
+                                   command=lambda: self._chatlog_sort(self.chatlog_tree2, "Message"))
+        self.chatlog_tree2.column("Time",     width=70,  anchor="w")
+        self.chatlog_tree2.column("Username", width=110, anchor="w")
+        self.chatlog_tree2.column("Message",  width=300, anchor="w")
+        self._style_tree(self.chatlog_tree2)
+        self.chatlog_tree2.tag_configure("user1", foreground=ACCENT)
+        self.chatlog_tree2.tag_configure("user2", foreground=YELLOW)
+        self.chatlog_tree2.tag_configure("user3", foreground="#ff88ff")
+
+        sb2 = ttk.Scrollbar(right, orient="vertical",
+                             command=self.chatlog_tree2.yview)
+        self.chatlog_tree2.configure(yscroll=sb2.set)
+        self.chatlog_tree2.pack(side="left", fill="both", expand=True)
+        sb2.pack(side="right", fill="y")
+
+        # Internal state
+        self._chatlog_file       = None   # open file handle
+        self._chatlog_recording  = False
+        self._chatlog_messages   = []     # all loaded/recorded messages
+        self._chatlog_sort_state = {}     # col -> reverse bool per tree
+
+    # ── Chat Log methods ──────────────────────────────────────
+    def _chatlog_auto_toggle(self):
+        """Auto Log ticked — start recording. Unticked — stop. Sync to Multi-Channel."""
+        self._chatlog_save_auto_state()
+        state = self.chatlog_auto_var.get()
+
+        # Sync back to Multi-Channel display
+        slug = ""
+        if self.channel:
+            slug = self.channel.get("slug", "")
+        if not slug:
+            slug = self.slug_var.get().strip().lower()
+        if slug and hasattr(self.app, "_sync_auto_log_from_session"):
+            self.app._sync_auto_log_from_session(slug, state)
+
+        if state:
+            if not self._chatlog_recording:
+                self._chatlog_start()
+        else:
+            if self._chatlog_recording:
+                self._chatlog_stop()
+
+    def _chatlog_save_auto_state(self):
+        """Save Auto Save tick state per streamer slug to chatlog_settings.json."""
+        try:
+            data = {}
+            if os.path.exists(_CHATLOG_SETTINGS_PATH):
+                with open(_CHATLOG_SETTINGS_PATH, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+            slug = self.slug_var.get().strip().lower() or "default"
+            auto_states = data.get("auto_save_states", {})
+            auto_states[slug] = self.chatlog_auto_var.get()
+            data["auto_save_states"] = auto_states
+            with open(_CHATLOG_SETTINGS_PATH, "w", encoding="utf-8") as f:
+                json.dump(data, f, indent=2)
+        except Exception:
+            pass
+
+    def _chatlog_restore_auto_state(self, slug):
+        """Restore Auto Save tick state for this streamer."""
+        try:
+            if os.path.exists(_CHATLOG_SETTINGS_PATH):
+                with open(_CHATLOG_SETTINGS_PATH, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                auto_states = data.get("auto_save_states", {})
+                state = auto_states.get(slug.lower(), False)
+                self.chatlog_auto_var.set(state)
+        except Exception:
+            pass
+
+    def _chatlog_start(self):
+        """Begin saving chat to a .txt file in the streamer subfolder."""
+        folder = self._chatlog_get_save_path()
+        slug = self.channel["slug"] if self.channel else "chat"
+        ts   = datetime.now().strftime("%Y%m%d_%H%M%S")
+        path = os.path.join(folder, f"chatlog_{slug}_{ts}.txt")
+        try:
+            self._chatlog_file      = open(path, "w", encoding="utf-8")
+            self._chatlog_recording = True
+            self.chatlog_start_btn.config(state="disabled")
+            self.chatlog_stop_btn.config(state="normal")
+            self.chatlog_status_var.set(
+                f"🔴 Recording → {os.path.join(os.path.basename(folder), os.path.basename(path))}")
+            # Start pulsing indicator in topbar
+            self._chatlog_pulse_on = True
+            self._chatlog_pulse()
+        except Exception as e:
+            self.chatlog_status_var.set(f"Error opening file: {e}")
+
+    def _chatlog_stop(self):
+        """Stop recording."""
+        self._chatlog_recording = False
+        self._chatlog_pulse_on  = False
+        if self._chatlog_file:
+            self._chatlog_file.close()
+            self._chatlog_file = None
+        self.chatlog_start_btn.config(state="normal")
+        self.chatlog_stop_btn.config(state="disabled")
+        self.chatlog_status_var.set("Recording stopped.")
+        # Clear topbar indicator
+        try:
+            self.chatlog_rec_label.config(text="", bg=BG2)
+        except Exception:
+            pass
+        # Restore tab text
+        try:
+            for tab_id in self.nb.tabs():
+                if "Chat Logs" in self.nb.tab(tab_id, "text"):
+                    self.nb.tab(tab_id, text="💾 Chat Logs")
+                    break
+        except Exception:
+            pass
+
+    def _chatlog_pulse(self):
+        """Pulse the topbar recording indicator — visible from any tab."""
+        if not self._chatlog_pulse_on:
+            return
+        try:
+            current = self.chatlog_rec_label.cget("text")
+            if current == "🔴 REC":
+                self.chatlog_rec_label.config(text="⚫ REC", fg=GREY, bg=BG2)
+            else:
+                self.chatlog_rec_label.config(text="🔴 REC", fg=RED, bg=BG2)
+        except Exception:
+            pass
+        self.root.after(800, self._chatlog_pulse)
+
+    def _chatlog_record(self, msg):
+        """Appends message to file whenever recording is active.
+        Auto Log only controls auto-start — not whether data gets written."""
+        if not self._chatlog_recording or not self._chatlog_file:
+            return
+        try:
+            ts       = datetime.fromtimestamp(msg["timestamp"]).strftime("%H:%M:%S")
+            username = msg.get("username", "?")
+            content  = msg.get("content", "")
+            badges   = ",".join(msg.get("badges", []))
+            line     = f"[{ts}] {username} [{badges}]: {content}\n"
+            self._chatlog_file.write(line)
+            self._chatlog_file.flush()
+            self._chatlog_messages.append({
+                "time": ts, "username": username,
+                "message": content, "badges": badges,
+                "is_reply": msg.get("is_reply", False),
+                "reply_to_user": msg.get("reply_to_user", ""),
+            })
+        except Exception:
+            pass
+
+    def _chatlog_browse(self):
+        """Browse for save folder — blocks actual system folders."""
+        folder = filedialog.askdirectory(
+            initialdir=self.chatlog_folder_var.get(),
+            title="Select Chat Log Save Folder")
+        if not folder:
+            return
+
+        # Only block actual Windows system folders — not user folders on C:
+        system_drive = os.environ.get("SystemDrive", "C:").upper()
+        windir       = os.environ.get("SystemRoot",
+                       os.path.join(system_drive, "Windows")).upper()
+        blocked = [
+            os.path.join(windir).upper(),
+            os.path.join(system_drive, "\\", "Windows").upper(),
+            os.path.join(system_drive, "\\", "System32").upper(),
+            os.path.join(system_drive, "\\", "Program Files").upper(),
+            os.path.join(system_drive, "\\", "Program Files (x86)").upper(),
+            os.path.join(system_drive, "\\", "ProgramData").upper(),
+        ]
+        folder_norm = os.path.normcase(os.path.normpath(folder))
+        for sp in blocked:
+            sp_norm = os.path.normcase(os.path.normpath(sp))
+            if folder_norm == sp_norm or folder_norm.startswith(sp_norm + os.sep):
+                messagebox.showwarning(
+                    "System Folder",
+                    f"The folder you selected is a protected system folder:"
+                    f"\n\n{folder}"
+                    "\n\nPlease choose a different location such as:\n"
+                    "  • Desktop\n  • Documents\n  • A custom folder you created")
+                return
+
+        self.chatlog_folder_var.set(folder)
+        self.chatlog_status_var.set(f"Save folder set: {folder}")
+        _save_chatlog_folder(folder)
+        self._ai_save_settings()
+
+    def _chatlog_get_save_path(self):
+        """Return the streamer subfolder path — creates it if needed."""
+        base = self.chatlog_folder_var.get().strip()
+        if not base or not os.path.isdir(base):
+            base = APP_DIR
+
+        slug = ""
+        if self.channel:
+            slug = self.channel.get("slug", "").strip()
+        if not slug:
+            slug = self.slug_var.get().strip().lower()
+        if not slug:
+            slug = "unknown_streamer"
+
+        streamer_folder = os.path.join(base, slug)
+        if not os.path.exists(streamer_folder):
+            try:
+                os.makedirs(streamer_folder)
+            except Exception:
+                streamer_folder = base
+
+        return streamer_folder
+
+    def _chatlog_load(self):
+        """Load a saved chat log — opens in streamer subfolder if available."""
+        base = self.chatlog_folder_var.get().strip()
+        if not base or not os.path.isdir(base):
+            base = APP_DIR
+
+        # Determine streamer slug from active session
+        slug = ""
+        if self.channel:
+            slug = self.channel.get("slug", "").strip()
+        if not slug:
+            slug = self.slug_var.get().strip().lower()
+
+        # Use streamer subfolder if it exists, otherwise use base
+        if slug:
+            candidate = os.path.join(base, slug)
+            start_dir = candidate if os.path.isdir(candidate) else base
+        else:
+            start_dir = base
+
+        path = filedialog.askopenfilename(
+            initialdir=start_dir,
+            title="Load Chat Log",
+            filetypes=[("Text files","*.txt"), ("All files","*.*")])
+        if not path:
+            return
+        import re as _re
+        pattern = _re.compile(
+            r'^\[(\d{2}:\d{2}:\d{2})\]\s+(\S+)\s+\[([^\]]*)\]:\s*(.*)')
+        msgs = []
+        try:
+            with open(path, "r", encoding="utf-8") as fh:
+                for line in fh:
+                    m = pattern.match(line.strip())
+                    if m:
+                        msgs.append({
+                            "time":     m.group(1),
+                            "username": m.group(2),
+                            "badges":   m.group(3),
+                            "message":  m.group(4),
+                        })
+            self._chatlog_messages = msgs
+            self.chatlog_status_var.set(
+                f"✓ Loaded {len(msgs)} messages from {os.path.basename(path)}")
+            self._chatlog_apply_filters()
+        except Exception as e:
+            self.chatlog_status_var.set(f"Load error: {e}")
+
+    def _chatlog_apply_filters(self):
+        """Left panel shows full chat log. Right panel shows all filtered results."""
+        f1 = self.chatlog_filter1_var.get().strip().lower()
+        f2 = self.chatlog_filter2_var.get().strip().lower()
+        f3 = getattr(self, 'chatlog_filter3_var', None)
+        f3 = f3.get().strip().lower() if f3 else ""
+
+        want_mentions = getattr(self, "chatlog_filter_mentions_var", None)
+        want_mentions = want_mentions.get() if want_mentions else False
+        want_replies  = getattr(self, "chatlog_filter_replies_var", None)
+        want_replies  = want_replies.get() if want_replies else False
+        keyword = getattr(self, "chatlog_keyword_var", None)
+        keyword = keyword.get().strip().lower() if keyword else ""
+
+        # Left panel — always complete unfiltered log
+        for row in self.chatlog_tree1.get_children():
+            self.chatlog_tree1.delete(row)
+        for msg in self._chatlog_messages:
+            self.chatlog_tree1.insert("", "end", tags=("user1",), values=(
+                msg["time"], msg["username"], msg["message"]))
+
+        # Right panel — filtered results
+        for row in self.chatlog_tree2.get_children():
+            self.chatlog_tree2.delete(row)
+
+        any_filter = f1 or f2 or f3 or want_mentions or want_replies or keyword
+
+        filtered = []
+
+        if any_filter:
+            for msg in self._chatlog_messages:
+                uname   = msg["username"].lower()
+                content = msg.get("message", "")
+                is_reply = msg.get("is_reply", False)
+
+                passes_username = ((f1 and f1 in uname) or
+                                   (f2 and f2 in uname) or
+                                   (f3 and f3 in uname))
+                passes_mention  = want_mentions and "@" in content
+                passes_reply    = want_replies  and is_reply
+                passes_keyword  = bool(keyword and keyword in content.lower())
+
+                if passes_username or passes_mention or passes_reply or passes_keyword:
+                    filtered.append(msg)
+
+        for msg in filtered:
+            uname   = msg["username"].lower()
+            content = msg.get("message", "")
+            is_reply = msg.get("is_reply", False)
+            if   f1 and f1 in uname:                     tag = "user1"
+            elif f2 and f2 in uname:                     tag = "user2"
+            elif f3 and f3 in uname:                     tag = "user3"
+            elif want_mentions and "@" in content:        tag = "user1"
+            elif want_replies and is_reply:               tag = "user2"
+            elif keyword and keyword in content.lower():  tag = "user3"
+            else:                                         tag = "user1"
+            self.chatlog_tree2.insert("", "end", tags=(tag,), values=(
+                msg["time"], msg["username"], msg["message"]))
+
+        filters_active = []
+        for x in [f1, f2, f3]:
+            if x: filters_active.append(f"'{x}'")
+        if want_mentions:  filters_active.append("@Mentions")
+        if want_replies:   filters_active.append("Replies")
+        if keyword:        filters_active.append(f"Keyword:'{keyword}'")
+
+        total = len(self._chatlog_messages)
+        self.chatlog_count_var.set(
+            f"Total: {total}  |  "
+            f"{'Filters: ' + ' + '.join(filters_active) if filters_active else 'No filter'}  |  "
+            f"Filtered: {len(filtered)}")
+
+    def _chatlog_clear_filters(self):
+        self.chatlog_filter1_var.set("")
+        self.chatlog_filter2_var.set("")
+        self.chatlog_filter3_var.set("")
+        if hasattr(self, "chatlog_keyword_var"):
+            self.chatlog_keyword_var.set("")
+        if hasattr(self, "chatlog_filter_mentions_var"):
+            self.chatlog_filter_mentions_var.set(False)
+        if hasattr(self, "chatlog_filter_replies_var"):
+            self.chatlog_filter_replies_var.set(False)
+        self._chatlog_apply_filters()
+
+    def _chatlog_sort(self, tree, col):
+        """Sort a chat log treeview by column."""
+        key = id(tree)
+        rev = self._chatlog_sort_state.get((key, col), False)
+        rows = [(tree.set(k, col), k) for k in tree.get_children("")]
+        rows.sort(key=lambda x: x[0].lower(), reverse=rev)
+        for i, (_, k) in enumerate(rows):
+            tree.move(k, "", i)
+        self._chatlog_sort_state[(key, col)] = not rev
+
     def _build_ai_viewbot_tab(self):
         f = tk.Frame(self.nb, bg=BG)
         self.nb.add(f, text="🤖 AI Analysis")
@@ -2022,12 +2655,11 @@ Complete ALL 6 sections. Do not stop early."""
             if not text:
                 text = "No response received from AI model."
 
-            # Parse AI verdict and score from the response text
+            # Parse AI verdict and score — only from the FINAL VERDICT section
             import re as _re
             ai_verdict = num_verdict  # fallback to numeric
             ai_score   = num_score
 
-            # Look for verdict line in AI response
             verdict_map = {
                 "CONFIRMED BOTTING": ("🔴 CONFIRMED BOTTING", 95),
                 "HIGH RISK":         ("🔴 HIGH RISK",         80),
@@ -2035,21 +2667,37 @@ Complete ALL 6 sections. Do not stop early."""
                 "LOW RISK":          ("🟢 LOW RISK",          25),
                 "CLEAN":             ("✅ CLEAN",              5),
             }
-            for line in text.split("\n"):
-                upper = line.upper()
-                for key, (label, default_score) in verdict_map.items():
-                    if key in upper and ("VERDICT" in upper or "FINAL" in upper
-                                        or "RISK" in upper or "CLEAN" in upper
-                                        or "BOTTING" in upper):
-                        ai_verdict = label
-                        # Try to extract numeric score from same line
-                        nums = _re.findall(r'\b(\d{1,3})\s*/\s*100\b', line)
-                        if nums:
-                            ai_score = int(nums[0])
-                        else:
-                            ai_score = default_score
-                        break
-                if ai_verdict != num_verdict:
+
+            # Step 1 — Find the final verdict section of the report
+            # Look for lines that explicitly declare the verdict
+            verdict_section = ""
+            lines = text.split("\n")
+            for i, line in enumerate(lines):
+                upper = line.upper().strip()
+                # Match lines that are clearly verdict declarations
+                if _re.search(
+                    r'(FINAL\s+VERDICT|VERDICT\s*:|OVERALL\s+VERDICT|CONCLUSION\s*:)',
+                    upper):
+                    # Grab this line and next 3 lines as the verdict section
+                    verdict_section = "\n".join(lines[i:i+4])
+                    break
+
+            # Step 2 — If no explicit verdict section found try last 10 lines
+            if not verdict_section:
+                verdict_section = "\n".join(lines[-10:])
+
+            # Step 3 — Parse verdict and score from verdict section only
+            for key, (label, default_score) in verdict_map.items():
+                if key in verdict_section.upper():
+                    ai_verdict = label
+                    # Try to extract numeric score from verdict section
+                    nums = _re.findall(r'\b(\d{1,3})\s*/\s*100\b', verdict_section)
+                    if nums:
+                        ai_score = int(nums[0])
+                        # Clamp to valid range
+                        ai_score = max(0, min(100, ai_score))
+                    else:
+                        ai_score = default_score
                     break
 
             self.root.after(0, lambda t=text, s=ai_score, v=ai_verdict:
@@ -4572,6 +5220,10 @@ A NOTE ON CERTAINTY
             self.ai_vb_run_btn.config(
                 state="normal", bg=ACCENT, fg="#000",
                 text="\u25b6 Run AI Analysis")
+        # Stop chat log recording if active
+        if hasattr(self, "_chatlog_recording") and self._chatlog_recording:
+            self._chatlog_stop()
+
         # Cancel auto scans
         if hasattr(self, "_chatter_auto_id") and self._chatter_auto_id:
             self.root.after_cancel(self._chatter_auto_id)
@@ -4611,6 +5263,15 @@ A NOTE ON CERTAINTY
             if slug and hasattr(self, "info_slug_var"):
                 self.info_slug_var.set(slug)
                 self.root.after(1000, self._load_streamer_info)
+            # Restore Auto Log state for this streamer
+            if slug and hasattr(self, "chatlog_auto_var"):
+                self._chatlog_restore_auto_state(slug)
+                # Check app-level Auto Log slugs from Multi-Channel
+                if hasattr(self.app, "_auto_log_slugs") and slug in self.app._auto_log_slugs:
+                    self.chatlog_auto_var.set(True)
+                # If Auto Log is on start recording automatically
+                if self.chatlog_auto_var.get() and not self._chatlog_recording:
+                    self.root.after(500, self._chatlog_start)
 
         # Update the tab label in the main notebook to show streamer name
         try:
@@ -5018,6 +5679,7 @@ class KickGUI:
                 json.dump({
                     "channels":        slugs,
                     "auto_mon_slugs":  list(self._auto_mon_slugs),
+                    "auto_log_slugs":  list(self._auto_log_slugs),
                     "notify_enabled":  False,
                 }, f, indent=2)
         except Exception:
@@ -5619,14 +6281,15 @@ class KickGUI:
         tk.Label(f, textvariable=self.multi_status, bg=BG, fg=GREY,
                  font=("Segoe UI",9)).pack(anchor="w", padx=8, pady=2)
 
-        # Treeview — added Auto Mon column
-        cols = ("Streamer","Status","Viewers","Category","Followers","Δ Followers","Last Updated","Auto Mon")
+        # Treeview — added Auto Mon and Auto Log columns
+        cols = ("Streamer","Status","Viewers","Category","Followers","Δ Followers","Last Updated","Auto Mon","Auto Log")
         self.multi_tree = ttk.Treeview(f, columns=cols, show="headings", selectmode="browse")
-        widths = [150, 75, 85, 140, 90, 90, 140, 75]
+        widths = [140, 75, 85, 130, 90, 90, 130, 75, 75]
         for col, w in zip(cols, widths):
             self.multi_tree.heading(col, text=col,
                 command=lambda c=col: self._multi_sort(c))
-            self.multi_tree.column(col, width=w, anchor="center" if col == "Auto Mon" else "w")
+            self.multi_tree.column(col, width=w,
+                anchor="center" if col in ("Auto Mon","Auto Log") else "w")
         self._style_tree(self.multi_tree)
         self.multi_tree.tag_configure("live",    foreground=ACCENT)
         self.multi_tree.tag_configure("offline", foreground=GREY)
@@ -5638,18 +6301,19 @@ class KickGUI:
         self._multi_sort_col = "Status"
         self._multi_sort_rev = True
 
-        # Track notification state and Auto Mon settings
-        self._notified_live   = set()   # slugs we've already notified about
-        self._auto_mon_slugs  = set()   # slugs with Auto Mon ticked
-        self._notify_popups   = []      # active notification windows
-        self._multi_auto_mon  = {}      # slug -> BooleanVar
+        # Track notification state and Auto Mon/Auto Log settings
+        self._notified_live   = set()
+        self._auto_mon_slugs  = set()
+        self._auto_log_slugs  = set()   # slugs with Auto Log ticked
+        self._notify_popups   = []
+        self._multi_auto_mon  = {}
 
         sb = ttk.Scrollbar(f, orient="vertical", command=self.multi_tree.yview)
         self.multi_tree.configure(yscroll=sb.set)
         self.multi_tree.pack(side="left", fill="both", expand=True, padx=(4,0), pady=4)
         sb.pack(side="right", fill="y", pady=4, padx=(0,4))
 
-        tk.Label(f, text="Double-click a channel to open in Live Monitor  |  Click Auto Mon column to toggle auto-monitoring",
+        tk.Label(f, text="Double-click to open in Live Monitor  |  Click Auto Mon to toggle auto-monitoring  |  Click Auto Log to toggle chat recording",
                  bg=BG, fg=GREY, font=("Segoe UI",8)).pack(pady=(0,4))
 
         # Scheduled report controls
@@ -5950,12 +6614,13 @@ class KickGUI:
             if isinstance(ts, float):
                 ts = datetime.fromtimestamp(ts).strftime("%H:%M:%S")
             auto_mon = "✅" if slug in self._auto_mon_slugs else "☐"
+            auto_log = "✅" if slug in self._auto_log_slugs else "☐"
             self.multi_tree.insert("","end", iid=slug, tags=(tag,), values=(
                 slug, status,
                 f"{ch.get('viewers',0):,}" if is_live else "—",
                 ch.get("category","N/A"),
                 f"{flw:,}", delta_s, ts,
-                auto_mon,
+                auto_mon, auto_log,
             ))
         n_live = sum(1 for ch in self._multi_channels.values() if ch.get("is_live"))
         self.multi_status.set(
@@ -5966,21 +6631,63 @@ class KickGUI:
             self._multi_sort_apply()
 
     def _multi_tree_click(self, event):
-        """Handle click on Auto Mon column to toggle it."""
+        """Handle click on Auto Mon or Auto Log column to toggle them."""
         region = self.multi_tree.identify_region(event.x, event.y)
         if region != "cell":
             return
         col  = self.multi_tree.identify_column(event.x)
         item = self.multi_tree.identify_row(event.y)
+        if not item:
+            return
+        slug = item
+
         # Column #8 = Auto Mon
-        if col == "#8" and item:
-            slug = item  # we use slug as iid
+        if col == "#8":
             if slug in self._auto_mon_slugs:
                 self._auto_mon_slugs.discard(slug)
             else:
                 self._auto_mon_slugs.add(slug)
-            self._multi_save_settings()
+            self._multi_save()
             self._multi_render()
+
+        # Column #9 = Auto Log — syncs with session chatlog_auto_var
+        elif col == "#9":
+            if slug in self._auto_log_slugs:
+                self._auto_log_slugs.discard(slug)
+                new_state = False
+            else:
+                self._auto_log_slugs.add(slug)
+                new_state = True
+            self._multi_save()
+            # Sync to open session if it exists
+            self._sync_auto_log_to_session(slug, new_state)
+            self._multi_render()
+
+    def _sync_auto_log_to_session(self, slug, state):
+        """Find the open session for this slug and sync its Auto Log checkbox."""
+        for session in self.sessions:
+            sess_slug = ""
+            if session.channel:
+                sess_slug = session.channel.get("slug", "")
+            if not sess_slug:
+                sess_slug = session.slug_var.get().strip().lower()
+            if sess_slug == slug:
+                session.chatlog_auto_var.set(state)
+                session._chatlog_save_auto_state()
+                if state and not session._chatlog_recording:
+                    session._chatlog_start()
+                elif not state and session._chatlog_recording:
+                    session._chatlog_stop()
+                break
+
+    def _sync_auto_log_from_session(self, slug, state):
+        """Called by session when Auto Log toggled — updates Multi-Channel display."""
+        if state:
+            self._auto_log_slugs.add(slug)
+        else:
+            self._auto_log_slugs.discard(slug)
+        self._multi_save()
+        self._multi_render()
 
     def _multi_notify_toggle(self):
         """Enable or disable Live Notifications — greys out Auto Mon when off."""
@@ -6198,6 +6905,7 @@ class KickGUI:
                 return
             # Restore Auto Mon slugs and notification setting
             self._auto_mon_slugs = set(data.get("auto_mon_slugs", []))
+            self._auto_log_slugs = set(data.get("auto_log_slugs", []))
             notify = data.get("notify_enabled", False)
             self.multi_notify_var.set(notify)
             for slug in slugs:

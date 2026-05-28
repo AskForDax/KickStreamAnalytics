@@ -24,6 +24,9 @@ A fully self-contained desktop analytics dashboard for **Kick.com** streamers. M
 - 👥 **Chatter classification** — Active / Casual / Lurker / Known Bot / Likely Bot
 - 🚫 **Spam & emote detection** — filter spammers and emote-only messages
 - 🔄 **Auto Scan** — Chatters, Top Words and Activity Chart refresh automatically
+- 💾 **Chat Logs tab** — record, save and review live chat sessions
+- 🔴 **REC indicator** — pulses in session topbar when recording is active
+- 🔍 **Chat filters** — filter by username, keyword, @ mentions and replies
 - 📅 **Stream history** — VODs, clips, gift leaderboards, stream stats
 - 🎙️ **Streamer profiles** — clickable social links, full channel info, top categories
 - 📄 **Full session reports** — generate and export detailed analytics
@@ -98,7 +101,7 @@ The AI Analysis tab sends 10 minutes of collected stream data to an LLM for fore
 
 | Tab | Description |
 |---|---|
-| 💬 Live Chat | Real-time chat, badge filters, spammer detection, Exclude Emotes |
+| 💬 Live Chat | Real-time chat, badge filters, @ Mentions, 💬 Replies, ▶ Start/■ Stop/☐ Auto Log |
 | 🤖 AI Analysis | AI viewbot detection — Ollama or Claude — 10min lock, auto-run |
 | 🎉 Events | 🚀 Raids ⭐ Subs 🎁 Gifts 🔨 Bans ✅ Unbans 📌 Pins 🗑 Deleted 📴 Stream Ended |
 | 👥 Chatters | Chatter table, bot classification, Auto Scan 30s, CSV export |
@@ -107,6 +110,7 @@ The AI Analysis tab sends 10 minutes of collected stream data to an LLM for fore
 | 🎙️ Streamer Info | Auto-loads on connect, clickable social links, VODs, clips |
 | 📅 History | Past streams, clips, gift leaderboards, stream stats |
 | 📄 Report | Full session report — generate and export |
+| 💾 Chat Logs | Record chat sessions, filter by username/keyword/@mentions/replies |
 | 📖 AI Guide | Built-in AI reference guide |
 
 ### Global Tabs (pinned left)
@@ -135,6 +139,10 @@ The Multi-Channel tab includes two powerful automation features:
   - When that channel goes live a new monitor tab opens and starts automatically
   - No popup shown — completely silent
 
+- **Auto Log column** — tick individual channels to auto-start chat recording
+  - Synced two-way with the Auto Log checkbox in the Live Chat tab
+  - State saved per streamer across app restarts
+
 > Live Notifications always resets to OFF when the app is closed
 
 ---
@@ -161,6 +169,31 @@ Compiled executables may be flagged by antivirus heuristics — this is a **fals
 **Recommended:** Use **Option A** (source version) — Python scripts are never flagged.
 
 > ❌ Do not submit your compiled exe to VirusTotal
+
+---
+
+## 💾 Chat Logs
+
+Record live chat sessions to organised `.txt` files for later review.
+
+**Controls in Live Chat toolbar:**
+- **▶ Start** — begin recording to a timestamped file
+- **■ Stop** — stop recording and close the file
+- **☐ Auto Log** — auto-starts recording when monitoring begins (saved per streamer)
+- **🔴 REC** — pulses in the session topbar whenever recording is active
+
+**File organisation:**
+- Set your base save folder in the Chat Logs tab
+- App automatically creates a subfolder named after the streamer
+- Example: `C:\ChatLogs\xqc\chatlog_xqc_20260527_143022.txt`
+- Folder remembered across app restarts
+
+**Filter options in Chat Logs tab:**
+- Filter 1/2/3 — filter by username → results in Filtered Chat panel
+- Keyword — search message content → results in Filtered Chat panel
+- @ Mentions — show messages containing @ → Filtered Chat panel
+- 💬 Replies — show Kick reply events → Filtered Chat panel
+- All filters use OR logic — any match appears in Filtered Chat
 
 ---
 
