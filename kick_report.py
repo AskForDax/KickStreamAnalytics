@@ -300,7 +300,8 @@ def parse_channel(data):
         "bio":           (data.get("user", {}).get("bio") or "")[:120],
         "is_live":       bool(ls),
         "stream_title":  ls.get("session_title", "N/A") if ls else "N/A",
-        "viewer_count":  ls.get("viewer_count", 0) if ls else 0,
+        "viewer_count":  ls.get("viewer_count") or 0 if ls else 0,
+        "viewer_count_hidden": ls is not None and ls.get("viewer_count") in (None, 0, ""),
         "category":      cat,
         "duration":      duration_str,
         "started_at":    started_dt,
@@ -2489,6 +2490,7 @@ class StreamerSession:
         ch       = self.channel or {}
         elapsed  = time.time() - (self.engine.start_time or time.time())
         viewers  = ch.get("viewer_count", 0)
+        viewer_count_hidden = ch.get("viewer_count_hidden", False)
         chatters = len(self.engine.user_msgs)
         total_msgs = len(self.engine.messages)
         mpm      = total_msgs / (elapsed / 60) if elapsed > 60 else 0
@@ -2523,12 +2525,12 @@ Stream duration monitored: {int(elapsed//60)} minutes {int(elapsed%60)} seconds
 Verified channel: {ch.get("verified", False)}
 
 === CURRENT METRICS ===
-Current viewer count: {viewers:,}
+Current viewer count: {viewers:,}{" ⚠ HIDDEN — streamer has enabled viewer count hiding on Kick. This count appears static and may not reflect real viewership. Do NOT use viewer-count-based metrics (chat ratio, msgs/1k viewers) as primary evidence in your analysis. Focus on chat activity, event frequency and curve shape instead." if viewer_count_hidden else ""}
 Total unique chatters: {chatters:,}
-Chat/Viewer ratio: {chat_ratio:.2f}% (healthy streams: 3-8%)
+Chat/Viewer ratio: {chat_ratio:.2f}% (healthy streams: 3-8%){" — NOTE: unreliable, viewer count is hidden" if viewer_count_hidden else ""}
 Total messages captured: {total_msgs:,}
 Messages per minute: {mpm:.1f}
-Messages per minute per 1,000 viewers: {mpm_per_1k:.2f} (healthy: 10-50)
+Messages per minute per 1,000 viewers: {mpm_per_1k:.2f} (healthy: 10-50){" — NOTE: unreliable, viewer count is hidden" if viewer_count_hidden else ""}
 Active chatters (5+ messages): {active:,}
 Known bots detected: {bot_count:,} ({bot_ratio:.1f}% of chatters)
 Subscriptions seen: {subs}
@@ -2604,7 +2606,7 @@ Complete ALL 6 sections. Do not stop early."""
                     "model":  model,
                     "prompt": prompt,
                     "stream": False,
-                    "options": {"num_predict": 3000, "temperature": 0.3}
+                    "options": {"num_predict": 3500, "temperature": 0.3}
                 }).encode("utf-8")
 
                 req = _ur.Request(
@@ -2631,7 +2633,7 @@ Complete ALL 6 sections. Do not stop early."""
 
                 payload = _json.dumps({
                     "model": "claude-sonnet-4-6",
-                    "max_tokens": 3000,
+                    "max_tokens": 3500,
                     "messages": [{"role": "user", "content": prompt}]
                 }).encode("utf-8")
 
@@ -5125,6 +5127,7 @@ A NOTE ON CERTAINTY
         self._clear_chat()
         self._viewer_history     = []
         self._ai_verdict_locked  = False
+        self._last_known_viewers = 0
 
         # Parse duration — handle countdown strings like "09:45" or "✓ Done"
         raw = self.dur_var.get().strip()
@@ -5247,7 +5250,7 @@ A NOTE ON CERTAINTY
         slug = self.channel["slug"] if self.channel else "?"
         name = self.channel.get("display_name", slug) if self.channel else slug
         self.status_var.set(f"✓ Connected — monitoring kick.com/{slug}")
-        self.root.after(30000, self._poll_channel)
+        self.root.after(10000, self._poll_channel)
 
         # Start auto scans on connect
         if hasattr(self, "chatter_auto_var") and self.chatter_auto_var.get():
@@ -5309,7 +5312,21 @@ A NOTE ON CERTAINTY
         ch = self.channel
         self.lbl_name.set(ch["display_name"])
         self.lbl_live.set("🔴 LIVE" if ch["is_live"] else "⬛ OFFLINE")
-        self.lbl_viewers.set(f"{ch['viewer_count']:,}")
+
+        # Viewer count — handle hidden count
+        if ch.get("viewer_count_hidden"):
+            # Preserve last known count if we have one
+            last_known = getattr(self, "_last_known_viewers", 0)
+            if last_known > 0:
+                self.lbl_viewers.set(f"{last_known:,}  👁 Hidden")
+            else:
+                self.lbl_viewers.set("👁 Hidden by streamer")
+        else:
+            vc = ch.get("viewer_count", 0)
+            if vc > 0:
+                self._last_known_viewers = vc
+            self.lbl_viewers.set(f"{vc:,}" if vc else "—")
+
         self.lbl_category.set(ch["category"])
         self.lbl_duration.set(ch["duration"])
         self.lbl_followers.set(f"{ch['followers']:,}")
@@ -5320,49 +5337,70 @@ A NOTE ON CERTAINTY
         self.lbl_emote.set("On" if ch["emote_mode"] else "Off")
         self.hist_slug_var.set(ch["slug"])
         self.info_slug_var.set(ch["slug"])
-        # Show last updated time so user knows data is live
         now = datetime.now().strftime("%H:%M:%S")
         self.lbl_ch_updated.config(text=f"↻ {now}")
 
 
     def _poll_channel(self):
         """
-        Poll the Kick API every 60s to keep channel/chatroom panel data fresh.
+        Poll the Kick API every 10s to keep channel/chatroom panel data fresh.
         Updates: viewers, followers, live status, title, category,
                  slow mode, sub-only mode, emote-only mode.
-        Runs in a background thread while monitoring is active.
+        Detects hidden viewer count (static count feature).
         """
         if not self.engine.running or not self.channel:
-            # Stop polling when not monitoring
-            self.root.after(30000, self._poll_channel)
+            self.root.after(10000, self._poll_channel)
             return
 
         slug = self.channel.get("slug","")
         if not slug:
-            self.root.after(30000, self._poll_channel)
+            self.root.after(10000, self._poll_channel)
             return
 
         def fetch_and_update():
             raw = get_channel(slug)
             if not raw:
-                self.root.after(30000, self._poll_channel)
+                self.root.after(10000, self._poll_channel)
                 return
             ch = parse_channel(raw)
             if not ch:
-                self.root.after(30000, self._poll_channel)
+                self.root.after(10000, self._poll_channel)
                 return
 
-            # Preserve started_at from original fetch for accurate live timer
+            # Preserve started_at from original fetch
             if self.channel.get("started_at") and not ch.get("started_at"):
                 ch["started_at"] = self.channel["started_at"]
 
+            # ── Hidden viewer count detection ──────────────────────
+            new_count  = ch.get("viewer_count", 0)
+            prev_count = self.channel.get("viewer_count", 0)
+
+            # Track how many consecutive polls returned the same count
+            if not hasattr(self, "_static_viewer_polls"):
+                self._static_viewer_polls = 0
+                self._static_viewer_count = 0
+
+            if new_count == prev_count and new_count > 0:
+                self._static_viewer_polls += 1
+            else:
+                self._static_viewer_polls = 0
+                self._static_viewer_count = new_count
+
+            # After 6 consecutive identical polls (60s at 10s interval)
+            # flag as hidden viewer count
+            if self._static_viewer_polls >= 6:
+                ch["viewer_count_hidden"] = True
+            else:
+                ch["viewer_count_hidden"] = False
+
             self.channel = ch
 
-            # Update viewer history for viewbot spike detection
-            self._viewer_history.append((time.time(), ch["viewer_count"]))
+            # Only add to viewer history if count is not hidden
+            if not ch.get("viewer_count_hidden"):
+                self._viewer_history.append((time.time(), ch["viewer_count"]))
 
             self.root.after(0, self._update_channel_panel)
-            self.root.after(30000, self._poll_channel)
+            self.root.after(10000, self._poll_channel)
 
         threading.Thread(target=fetch_and_update, daemon=True).start()
 
